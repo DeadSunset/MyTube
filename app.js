@@ -28,6 +28,12 @@ const shortsNextBtn = document.getElementById("shortsNextBtn");
 const shortsTitle = document.getElementById("shortsTitle");
 const shortsChannel = document.getElementById("shortsChannel");
 const shortsStatus = document.getElementById("shortsStatus");
+const shortsLikeBtn = document.getElementById("shortsLikeBtn");
+const shortsDislikeBtn = document.getElementById("shortsDislikeBtn");
+const shortsLikeCount = document.getElementById("shortsLikeCount");
+const shortsDislikeCount = document.getElementById("shortsDislikeCount");
+const shortsCommentInput = document.getElementById("shortsCommentInput");
+const shortsCommentBtn = document.getElementById("shortsCommentBtn");
 
 const DB_NAME = "mytube-db";
 const DB_VERSION = 1;
@@ -47,6 +53,7 @@ let state = {
   shortsQueue: [],
   shortsIndex: 0,
   sessionSeenShorts: new Set(),
+  activeShortsId: null,
 };
 
 const openDb = () =>
@@ -372,8 +379,6 @@ const refreshVideoMetadata = async (video) => {
 };
 
 const walkFolder = async (directoryHandle, files = []) => {
-  const permitted = await verifyPermission(directoryHandle);
-  if (!permitted) return files;
   for await (const entry of directoryHandle.values()) {
     if (entry.kind === "file") {
       if (entry.name.match(/\.(mp4|webm|mkv|mov)$/i)) {
@@ -411,10 +416,6 @@ const addFolder = async () => {
 
   for (const entry of entries) {
     const fileHandle = entry.handle;
-    const filePermitted = await verifyPermission(fileHandle);
-    if (!filePermitted) {
-      continue;
-    }
     const id = idFromHandle(fileHandle, crypto.randomUUID());
     const metadata = await refreshVideoMetadata({ handle: fileHandle });
     const video = {
@@ -481,6 +482,7 @@ const openShorts = async (direction = 0) => {
     }
   }
   const video = state.shortsQueue[state.shortsIndex];
+  state.activeShortsId = video.id;
   state.sessionSeenShorts.add(video.id);
   const file = await video.handle.getFile();
   const url = URL.createObjectURL(file);
@@ -489,6 +491,9 @@ const openShorts = async (direction = 0) => {
   shortsTitle.textContent = video.title;
   shortsChannel.textContent = video.channelName || video.folderName || "Без канала";
   shortsStatus.textContent = `Видео ${state.shortsIndex + 1} из ${state.shortsQueue.length}`;
+  shortsLikeCount.textContent = video.likes || 0;
+  shortsDislikeCount.textContent = video.dislikes || 0;
+  shortsCommentInput.value = "";
   if (!video.watched) {
     video.watched = true;
     await putItem(VIDEO_STORE, video);
@@ -625,6 +630,40 @@ shortsNextBtn.addEventListener("click", () => openShorts(1));
 shortsPrevBtn.addEventListener("click", () => openShorts(-1));
 
 shortsPlayer.addEventListener("ended", () => openShorts(1));
+
+shortsLikeBtn.addEventListener("click", async () => {
+  const current = state.videos.find((item) => item.id === state.activeShortsId);
+  if (!current) return;
+  const likes = (current.likes || 0) + 1;
+  current.likes = likes;
+  shortsLikeCount.textContent = likes;
+  await putItem(VIDEO_STORE, current);
+});
+
+shortsDislikeBtn.addEventListener("click", async () => {
+  const current = state.videos.find((item) => item.id === state.activeShortsId);
+  if (!current) return;
+  const dislikes = (current.dislikes || 0) + 1;
+  current.dislikes = dislikes;
+  shortsDislikeCount.textContent = dislikes;
+  await putItem(VIDEO_STORE, current);
+});
+
+shortsCommentBtn.addEventListener("click", async () => {
+  const text = shortsCommentInput.value.trim();
+  if (!text) return;
+  const current = state.videos.find((item) => item.id === state.activeShortsId);
+  if (!current) return;
+  const newComment = {
+    id: crypto.randomUUID(),
+    text,
+    createdAt: Date.now(),
+  };
+  current.comments = current.comments || [];
+  current.comments.push(newComment);
+  shortsCommentInput.value = "";
+  await putItem(VIDEO_STORE, current);
+});
 
 window.addEventListener("keydown", (event) => {
   if (!shortsView.classList.contains("active")) return;

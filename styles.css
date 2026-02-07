@@ -328,14 +328,16 @@ video {
 
 .shorts-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 260px;
+  grid-template-columns: minmax(0, 420px) 260px;
   gap: 24px;
   align-items: start;
+  justify-content: center;
 }
 
 .shorts-player {
   position: relative;
   max-width: 420px;
+  margin: 0 auto;
 }
 
 .shorts-player video {
@@ -356,6 +358,28 @@ video {
 
 .shorts-meta {
   margin-top: 10px;
+}
+
+.shorts-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.shorts-comment {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shorts-comment textarea {
+  width: 100%;
+  background: #121212;
+  border: 1px solid #303030;
+  color: var(--text);
+  padding: 10px;
+  border-radius: 4px;
 }
 
 @media (max-width: 960px) {
