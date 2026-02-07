@@ -41,6 +41,8 @@ const shortsLikeCount = document.getElementById("shortsLikeCount");
 const shortsDislikeCount = document.getElementById("shortsDislikeCount");
 const shortsCommentInput = document.getElementById("shortsCommentInput");
 const shortsCommentBtn = document.getElementById("shortsCommentBtn");
+const shortsHistoryBtn = document.getElementById("shortsHistoryBtn");
+const shortsHistoryList = document.getElementById("shortsHistoryList");
 const shortsPlayerWrap = document.getElementById("shortsPlayerWrap");
 const importStatus = document.getElementById("importStatus");
 const importLabel = document.getElementById("importLabel");
@@ -72,6 +74,7 @@ let state = {
   shortsIndex: 0,
   sessionSeenShorts: new Set(),
   activeShortsId: null,
+  watchedHistory: [],
 };
 
 const openDb = () =>
@@ -196,6 +199,62 @@ const formatCommentText = (text) => {
   );
 };
 
+const loadWatchedHistory = () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem("mytube-watched-history") || "[]");
+    if (Array.isArray(saved)) {
+      state.watchedHistory = saved;
+    }
+  } catch (error) {
+    console.warn("Не удалось загрузить историю просмотров", error);
+  }
+};
+
+const saveWatchedHistory = () => {
+  try {
+    localStorage.setItem("mytube-watched-history", JSON.stringify(state.watchedHistory));
+  } catch (error) {
+    console.warn("Не удалось сохранить историю просмотров", error);
+  }
+};
+
+const renderWatchedHistory = () => {
+  if (!shortsHistoryList) return;
+  shortsHistoryList.innerHTML = "";
+  const items = [...state.watchedHistory]
+    .sort((a, b) => b.watchedAt - a.watchedAt)
+    .slice(0, 20);
+  if (!items.length) {
+    const empty = document.createElement("li");
+    empty.textContent = "История пуста";
+    shortsHistoryList.appendChild(empty);
+    return;
+  }
+  items.forEach((item) => {
+    const li = document.createElement("li");
+    const date = new Date(item.watchedAt).toLocaleString("ru-RU");
+    li.textContent = `${item.title} • ${date}`;
+    shortsHistoryList.appendChild(li);
+  });
+};
+
+const recordWatch = (video) => {
+  if (!video) return;
+  const existingIndex = state.watchedHistory.findIndex((entry) => entry.id === video.id);
+  const record = {
+    id: video.id,
+    title: video.title,
+    watchedAt: Date.now(),
+  };
+  if (existingIndex >= 0) {
+    state.watchedHistory.splice(existingIndex, 1);
+  }
+  state.watchedHistory.unshift(record);
+  state.watchedHistory = state.watchedHistory.slice(0, 200);
+  saveWatchedHistory();
+  renderWatchedHistory();
+};
+
 const loadState = async () => {
   const [videos, folders] = await Promise.all([
     getAll(VIDEO_STORE),
@@ -218,6 +277,8 @@ const loadState = async () => {
   }));
   state.folders = folders || [];
   state.shuffledIds = [];
+  loadWatchedHistory();
+  renderWatchedHistory();
   renderFolders();
   renderVideos({ reset: true });
   await normalizeVideoMetadata();
@@ -505,6 +566,7 @@ const openVideo = async (videoId) => {
     await updateActiveVideo({ watched: true });
     updateWatchedIndicator(video.id, true);
   }
+  recordWatch(video);
   progressLabel.textContent =
     video.progress && video.duration
       ? `Последняя остановка: ${humanizeDuration(video.progress)} / ${video.durationLabel}`
@@ -639,20 +701,39 @@ const importEntries = async (entries, folderHandles = new Map(), rootName = "") 
     return;
   }
 
-  const total = entries.length;
+  const uniqueEntries = new Map();
+  entries.forEach((entry) => {
+    const key = entry.file ? buildFileKey(entry.file) : entry.relativePath;
+    if (!uniqueEntries.has(key)) {
+      uniqueEntries.set(key, entry);
+    }
+  });
+
+  const total = uniqueEntries.size;
   let processed = 0;
   updateImportStatus(processed, total);
   await new Promise((resolve) => requestAnimationFrame(() => resolve()));
 
-  const folderNames = new Set(entries.map((entry) => entry.parentPath || rootName));
+  const folderNames = new Set(
+    Array.from(uniqueEntries.values(), (entry) => entry.parentPath || rootName)
+  );
   if (rootName) {
     folderNames.add(rootName);
   }
   await ensureFolders(folderNames, folderHandles);
 
   const existingKeys = new Set(state.videos.map((video) => video.fileKey).filter(Boolean));
-  for (const entry of entries) {
-    const metadata = await refreshVideoMetadata(entry);
+  for (const entry of uniqueEntries.values()) {
+    let metadata;
+    try {
+      metadata = await refreshVideoMetadata(entry);
+    } catch (error) {
+      console.warn("Не удалось прочитать видео", entry.name, error);
+      processed += 1;
+      updateImportStatus(processed, total);
+      await new Promise((resolve) => setTimeout(resolve, 16));
+      continue;
+    }
     processed += 1;
     updateImportStatus(processed, total);
     if (metadata.fileKey && existingKeys.has(metadata.fileKey)) {
@@ -839,6 +920,7 @@ const openShorts = async (direction = 0) => {
     await putItem(VIDEO_STORE, video);
     updateWatchedIndicator(video.id, true);
   }
+  recordWatch(video);
 };
 
 const removeVideo = async (videoId) => {
@@ -1087,6 +1169,13 @@ if (shortsPlayBtn) {
     } else {
       shortsPlayer.pause();
     }
+  });
+}
+
+if (shortsHistoryBtn) {
+  shortsHistoryBtn.addEventListener("click", () => {
+    if (!shortsHistoryList) return;
+    shortsHistoryList.classList.toggle("hidden");
   });
 }
 
