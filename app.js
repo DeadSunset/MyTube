@@ -1,4 +1,5 @@
 const addFolderBtn = document.getElementById("addFolderBtn");
+const editLibraryBtn = document.getElementById("editLibraryBtn");
 const folderList = document.getElementById("folderList");
 const videoGrid = document.getElementById("videoGrid");
 const videoCount = document.getElementById("videoCount");
@@ -13,6 +14,7 @@ const likeCount = document.getElementById("likeCount");
 const dislikeCount = document.getElementById("dislikeCount");
 const progressLabel = document.getElementById("progressLabel");
 const commentInput = document.getElementById("commentInput");
+const commentList = document.getElementById("commentList");
 const saveCommentBtn = document.getElementById("saveCommentBtn");
 const recommendations = document.getElementById("recommendations");
 const videoCardTemplate = document.getElementById("videoCardTemplate");
@@ -22,12 +24,17 @@ const DB_NAME = "mytube-db";
 const DB_VERSION = 1;
 const VIDEO_STORE = "videos";
 const FOLDER_STORE = "folders";
+const PAGE_SIZE = 40;
+const TIME_PATTERN = /\b(\d{1,2}:\d{2}(?::\d{2})?)\b/g;
 
 let state = {
   videos: [],
   folders: [],
   activeVideoId: null,
   searchTerm: "",
+  visibleCount: PAGE_SIZE,
+  renderedCount: 0,
+  isEditing: false,
 };
 
 const openDb = () =>
@@ -69,6 +76,9 @@ const getAll = (storeName) =>
 const putItem = (storeName, value) =>
   withStore(storeName, "readwrite", (store) => store.put(value));
 
+const deleteItem = (storeName, key) =>
+  withStore(storeName, "readwrite", (store) => store.delete(key));
+
 const idFromHandle = (handle, fallback) => {
   if (handle?.name) {
     return `${handle.name}-${fallback}`;
@@ -95,43 +105,119 @@ const scoreMatch = (title, queryWords) => {
   return queryWords.reduce((score, word) => (words.has(word) ? score + 1 : score), 0);
 };
 
+const parseTimecode = (timecode) => {
+  const parts = timecode.split(":").map((value) => Number.parseInt(value, 10));
+  if (parts.some((part) => Number.isNaN(part))) return 0;
+  if (parts.length === 3) {
+    return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  }
+  if (parts.length === 2) {
+    return parts[0] * 60 + parts[1];
+  }
+  return 0;
+};
+
+const escapeHtml = (value) =>
+  value.replace(/[&<>"']/g, (match) => {
+    const map = {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    };
+    return map[match] || match;
+  });
+
+const formatCommentText = (text) => {
+  const escaped = escapeHtml(text);
+  return escaped.replace(
+    TIME_PATTERN,
+    (match) => `<a href="#" data-time="${match}">${match}</a>`
+  );
+};
+
 const loadState = async () => {
   const [videos, folders] = await Promise.all([
     getAll(VIDEO_STORE),
     getAll(FOLDER_STORE),
   ]);
-  state.videos = videos || [];
+  state.videos = (videos || []).map((video) => ({
+    ...video,
+    comments: Array.isArray(video.comments)
+      ? video.comments
+      : video.comment
+      ? [
+          {
+            id: crypto.randomUUID(),
+            text: video.comment,
+            createdAt: Date.now(),
+          },
+        ]
+      : [],
+  }));
   state.folders = folders || [];
   renderFolders();
-  renderVideos();
+  renderVideos({ reset: true });
 };
 
 const renderFolders = () => {
   folderList.innerHTML = "";
   state.folders.forEach((folder) => {
     const li = document.createElement("li");
-    li.textContent = folder.name;
+    const label = document.createElement("span");
+    label.textContent = folder.name;
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "delete-btn btn";
+    deleteButton.textContent = "Удалить";
+    deleteButton.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      await removeFolder(folder.id);
+    });
+    li.append(label, deleteButton);
     folderList.appendChild(li);
   });
 };
 
-const renderVideos = () => {
-  videoGrid.innerHTML = "";
-  const filtered = state.searchTerm
+const getFilteredVideos = () =>
+  state.searchTerm
     ? state.videos.filter((video) =>
         video.title.toLowerCase().includes(state.searchTerm.toLowerCase())
       )
     : state.videos;
+
+const renderVideos = ({ reset = false } = {}) => {
+  const filtered = getFilteredVideos();
+  if (reset) {
+    videoGrid.innerHTML = "";
+    state.renderedCount = 0;
+    state.visibleCount = Math.min(PAGE_SIZE, filtered.length);
+  }
+
+  const targetCount = Math.min(state.visibleCount, filtered.length);
   videoCount.textContent = `${filtered.length} видео`;
-  filtered.forEach((video) => {
+  const slice = filtered.slice(state.renderedCount, targetCount);
+  slice.forEach((video) => {
     const card = videoCardTemplate.content.cloneNode(true);
     card.querySelector(".title").textContent = video.title;
     card.querySelector(".duration").textContent = video.durationLabel || "--:--";
     card.querySelector(".meta").textContent = video.folderName || "Без папки";
     const element = card.querySelector(".video-card");
+    const thumbnail = card.querySelector(".thumbnail");
+    if (video.thumbnail) {
+      thumbnail.style.backgroundImage = `url(${video.thumbnail})`;
+    } else {
+      thumbnail.style.backgroundImage = "";
+    }
+    const deleteBtn = card.querySelector(".delete-btn");
+    deleteBtn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      await removeVideo(video.id);
+    });
     element.addEventListener("click", () => openVideo(video.id));
     videoGrid.appendChild(card);
   });
+  state.renderedCount = targetCount;
 };
 
 const renderRecommendations = (currentVideo) => {
@@ -158,6 +244,27 @@ const renderRecommendations = (currentVideo) => {
   });
 };
 
+const renderComments = (video) => {
+  commentList.innerHTML = "";
+  if (!video.comments.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "Заметок пока нет.";
+    commentList.appendChild(empty);
+    return;
+  }
+  video.comments.forEach((comment) => {
+    const wrapper = document.createElement("div");
+    wrapper.className = "comment";
+    const text = document.createElement("p");
+    text.innerHTML = formatCommentText(comment.text);
+    const time = document.createElement("time");
+    time.textContent = new Date(comment.createdAt).toLocaleString("ru-RU");
+    wrapper.append(text, time);
+    commentList.appendChild(wrapper);
+  });
+};
+
 const switchView = (view) => {
   if (view === "watch") {
     libraryView.classList.remove("active");
@@ -176,7 +283,8 @@ const openVideo = async (videoId) => {
   watchTitle.textContent = video.title;
   likeCount.textContent = video.likes || 0;
   dislikeCount.textContent = video.dislikes || 0;
-  commentInput.value = video.comment || "";
+  commentInput.value = "";
+  renderComments(video);
 
   const file = await video.handle.getFile();
   const url = URL.createObjectURL(file);
@@ -195,18 +303,38 @@ const refreshVideoMetadata = async (video) => {
   const tempUrl = URL.createObjectURL(file);
   const tempVideo = document.createElement("video");
   tempVideo.preload = "metadata";
+  tempVideo.src = tempUrl;
 
   await new Promise((resolve) => {
     tempVideo.onloadedmetadata = () => resolve();
-    tempVideo.src = tempUrl;
   });
 
   const duration = tempVideo.duration;
+  let thumbnail = "";
+  if (Number.isFinite(duration) && duration > 0) {
+    const target = Math.min(duration - 0.2, Math.max(0.2, Math.random() * duration));
+    await new Promise((resolve) => {
+      tempVideo.currentTime = target;
+      tempVideo.onseeked = () => resolve();
+    });
+    const canvas = document.createElement("canvas");
+    const ratio = tempVideo.videoWidth && tempVideo.videoHeight
+      ? tempVideo.videoWidth / tempVideo.videoHeight
+      : 16 / 9;
+    canvas.width = 320;
+    canvas.height = Math.round(canvas.width / ratio);
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.drawImage(tempVideo, 0, 0, canvas.width, canvas.height);
+      thumbnail = canvas.toDataURL("image/jpeg", 0.8);
+    }
+  }
   URL.revokeObjectURL(tempUrl);
 
   return {
     duration,
     durationLabel: humanizeDuration(duration),
+    thumbnail,
   };
 };
 
@@ -244,14 +372,14 @@ const addFolder = async () => {
       ...metadata,
       likes: 0,
       dislikes: 0,
-      comment: "",
+      comments: [],
       progress: 0,
     };
     state.videos.push(video);
     await putItem(VIDEO_STORE, video);
   }
 
-  renderVideos();
+  renderVideos({ reset: true });
 };
 
 const updateActiveVideo = async (updates) => {
@@ -261,11 +389,51 @@ const updateActiveVideo = async (updates) => {
   await putItem(VIDEO_STORE, video);
 };
 
+const removeVideo = async (videoId) => {
+  state.videos = state.videos.filter((video) => video.id !== videoId);
+  await deleteItem(VIDEO_STORE, videoId);
+  if (state.activeVideoId === videoId) {
+    switchView("library");
+  }
+  renderVideos({ reset: true });
+};
+
+const removeFolder = async (folderId) => {
+  const folder = state.folders.find((item) => item.id === folderId);
+  if (!folder) return;
+  state.folders = state.folders.filter((item) => item.id !== folderId);
+  await deleteItem(FOLDER_STORE, folderId);
+  const videosToRemove = state.videos.filter((video) => video.folderName === folder.name);
+  for (const video of videosToRemove) {
+    await deleteItem(VIDEO_STORE, video.id);
+  }
+  state.videos = state.videos.filter((video) => video.folderName !== folder.name);
+  renderFolders();
+  renderVideos({ reset: true });
+};
+
+const toggleEditing = () => {
+  state.isEditing = !state.isEditing;
+  document.body.classList.toggle("editing", state.isEditing);
+  editLibraryBtn.textContent = state.isEditing ? "Готово" : "Редактировать";
+};
+
+const handleScroll = () => {
+  if (!libraryView.classList.contains("active")) return;
+  const filtered = getFilteredVideos();
+  if (state.renderedCount >= filtered.length) return;
+  if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 200) {
+    state.visibleCount = Math.min(state.visibleCount + PAGE_SIZE, filtered.length);
+    renderVideos();
+  }
+};
+
 addFolderBtn.addEventListener("click", addFolder);
+editLibraryBtn.addEventListener("click", toggleEditing);
 
 searchInput.addEventListener("input", (event) => {
   state.searchTerm = event.target.value;
-  renderVideos();
+  renderVideos({ reset: true });
 });
 
 likeBtn.addEventListener("click", async () => {
@@ -285,8 +453,19 @@ dislikeBtn.addEventListener("click", async () => {
 });
 
 saveCommentBtn.addEventListener("click", async () => {
-  await updateActiveVideo({ comment: commentInput.value });
-  alert("Комментарий сохранен");
+  const text = commentInput.value.trim();
+  if (!text) return;
+  const video = state.videos.find((item) => item.id === state.activeVideoId);
+  if (!video) return;
+  const newComment = {
+    id: crypto.randomUUID(),
+    text,
+    createdAt: Date.now(),
+  };
+  video.comments.push(newComment);
+  commentInput.value = "";
+  await updateActiveVideo({ comments: video.comments });
+  renderComments(video);
 });
 
 videoPlayer.addEventListener("timeupdate", () => {
@@ -310,5 +489,20 @@ window.addEventListener("hashchange", () => {
     switchView("library");
   }
 });
+
+commentList.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const timecode = target.dataset.time;
+  if (!timecode) return;
+  event.preventDefault();
+  const seconds = parseTimecode(timecode);
+  if (Number.isFinite(seconds)) {
+    videoPlayer.currentTime = seconds;
+    videoPlayer.play();
+  }
+});
+
+window.addEventListener("scroll", handleScroll);
 
 loadState();

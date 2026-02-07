@@ -9,11 +9,12 @@
   <body>
     <div class="app">
       <header class="topbar">
-        <div class="logo">MyTube</div>
+        <a class="logo" href="index.html">MyTube</a>
         <div class="search">
           <input id="searchInput" type="search" placeholder="Поиск" />
         </div>
         <button id="addFolderBtn" class="btn">Добавить папку</button>
+        <button id="editLibraryBtn" class="btn">Редактировать</button>
       </header>
 
       <main class="main">
@@ -47,9 +48,12 @@
                 </div>
                 <div class="notes">
                   <h3>Заметки / комментарии</h3>
-                  <textarea id="commentInput" rows="4" placeholder="Ваши заметки..."></textarea>
-                  <div class="notes-actions">
-                    <button id="saveCommentBtn" class="btn">Сохранить</button>
+                  <div id="commentList" class="comment-list"></div>
+                  <div class="comment-form">
+                    <textarea id="commentInput" rows="3" placeholder="Ваши заметки..."></textarea>
+                    <div class="notes-actions">
+                      <button id="saveCommentBtn" class="btn">Отправить</button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -71,6 +75,7 @@
         <div class="video-info">
           <h4 class="title"></h4>
           <p class="meta muted"></p>
+          <button class="delete-btn btn">Удалить</button>
         </div>
       </article>
     </template>

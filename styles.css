@@ -39,6 +39,7 @@ body {
   font-size: 20px;
   font-weight: 700;
   color: var(--accent);
+  text-decoration: none;
 }
 
 .search {
@@ -95,6 +96,10 @@ body {
   background: #1f1f1f;
   border-radius: 4px;
   font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .content {
@@ -142,6 +147,8 @@ body {
   align-items: flex-end;
   justify-content: flex-end;
   padding: 8px;
+  background-size: cover;
+  background-position: center;
 }
 
 .duration {
@@ -153,6 +160,8 @@ body {
 
 .video-info {
   padding: 12px;
+  display: grid;
+  gap: 6px;
 }
 
 .video-info .title {
@@ -210,6 +219,54 @@ video {
   padding: 10px;
   margin-top: 10px;
   border-radius: 4px;
+}
+
+.comment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.comment {
+  background: #1c1c1c;
+  padding: 10px;
+  border-radius: 6px;
+  border: 1px solid #2a2a2a;
+}
+
+.comment time {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+.comment-form {
+  margin-top: 12px;
+}
+
+.comment a {
+  color: #4ea3ff;
+  text-decoration: none;
+}
+
+.comment a:hover {
+  text-decoration: underline;
+}
+
+.delete-btn {
+  display: none;
+  font-size: 12px;
+  padding: 6px 10px;
+  justify-self: start;
+}
+
+.editing .delete-btn {
+  display: inline-flex;
 }
 
 .notes-actions {
