@@ -547,10 +547,12 @@ const switchView = (view) => {
     libraryView.classList.remove("active");
     watchView.classList.remove("active");
     shortsView.classList.add("active");
+    stopMainPlayback();
   } else {
     watchView.classList.remove("active");
     shortsView.classList.remove("active");
     libraryView.classList.add("active");
+    stopMainPlayback();
     stopShortsPlayback();
   }
 };
@@ -732,6 +734,13 @@ const importEntries = async (entries, folderHandles = new Map(), rootName = "") 
   await ensureFolders(folderNames, folderHandles);
 
   const existingKeys = new Set(state.videos.map((video) => video.fileKey).filter(Boolean));
+  const existingTitlesByFolder = new Map();
+  state.videos.forEach((video) => {
+    const folder = video.folderName || "";
+    const titleSet = existingTitlesByFolder.get(folder) || new Set();
+    titleSet.add(video.title);
+    existingTitlesByFolder.set(folder, titleSet);
+  });
   for (const entry of uniqueEntries.values()) {
     let metadata;
     try {
@@ -750,11 +759,17 @@ const importEntries = async (entries, folderHandles = new Map(), rootName = "") 
       continue;
     }
     const title = entry.name.replace(/\.[^.]+$/, "");
+    const folderKey = entry.parentPath || rootName;
+    const titleSet = existingTitlesByFolder.get(folderKey) || new Set();
+    if (titleSet.has(title)) {
+      await new Promise((resolve) => setTimeout(resolve, 16));
+      continue;
+    }
     const video = {
       id: idFromHandle(entry.handle, crypto.randomUUID(), entry.relativePath),
       title,
-      folderName: entry.parentPath || rootName,
-      channelName: entry.parentPath || rootName,
+      folderName: folderKey,
+      channelName: folderKey,
       relativePath: entry.relativePath,
       handle: entry.handle,
       file: entry.file,
@@ -769,6 +784,8 @@ const importEntries = async (entries, folderHandles = new Map(), rootName = "") 
     if (metadata.fileKey) {
       existingKeys.add(metadata.fileKey);
     }
+    titleSet.add(title);
+    existingTitlesByFolder.set(folderKey, titleSet);
     await putItem(VIDEO_STORE, video);
     appendVideoToGrid(video);
     await new Promise((resolve) => setTimeout(resolve, 16));
@@ -873,6 +890,12 @@ const updateShortsLayout = () => {
   if (!shortsPlayerWrap) return;
   const isWide = shortsPlayer.videoWidth >= shortsPlayer.videoHeight;
   shortsPlayerWrap.classList.toggle("wide", isWide);
+};
+
+const stopMainPlayback = () => {
+  videoPlayer.pause();
+  videoPlayer.removeAttribute("src");
+  videoPlayer.load();
 };
 
 const stopShortsPlayback = () => {
