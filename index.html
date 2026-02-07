@@ -9,7 +9,7 @@
   <body>
     <div class="app">
       <header class="topbar">
-        <a class="logo" href="index.html">MyTube</a>
+        <a class="logo" id="logoLink" href="index.html">MyTube</a>
         <div class="search">
           <input id="searchInput" type="search" placeholder="Поиск" />
         </div>
@@ -26,6 +26,12 @@
             </button>
           </div>
           <ul id="folderList" class="folder-list"></ul>
+          <div id="importStatus" class="import-status hidden">
+            <span id="importLabel" class="import-label muted">Импорт: 0 / 0</span>
+            <div class="import-bar">
+              <div id="importBarFill" class="import-bar-fill" style="width: 0%"></div>
+            </div>
+          </div>
         </aside>
 
         <section class="content">
@@ -100,6 +106,7 @@
     <template id="videoCardTemplate">
       <article class="video-card">
         <div class="thumbnail">
+          <span class="watched-indicator" aria-label="Просмотрено">⏰</span>
           <span class="duration"></span>
         </div>
         <div class="video-info">
