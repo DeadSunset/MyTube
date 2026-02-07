@@ -7,6 +7,10 @@ const videoGrid = document.getElementById("videoGrid");
 const videoCount = document.getElementById("videoCount");
 const searchInput = document.getElementById("searchInput");
 const logoLink = document.getElementById("logoLink");
+const dateSort = document.getElementById("dateSort");
+const durationMinInput = document.getElementById("durationMin");
+const durationMaxInput = document.getElementById("durationMax");
+const filterButtons = document.querySelectorAll(".filter-btn");
 const libraryView = document.getElementById("libraryView");
 const watchView = document.getElementById("watchView");
 const shortsView = document.getElementById("shortsView");
@@ -26,6 +30,7 @@ const recommendationTemplate = document.getElementById("recommendationTemplate")
 const shortsPlayer = document.getElementById("shortsPlayer");
 const shortsPrevBtn = document.getElementById("shortsPrevBtn");
 const shortsNextBtn = document.getElementById("shortsNextBtn");
+const shortsPlayBtn = document.getElementById("shortsPlayBtn");
 const shortsTitle = document.getElementById("shortsTitle");
 const shortsChannel = document.getElementById("shortsChannel");
 const shortsStatus = document.getElementById("shortsStatus");
@@ -35,6 +40,7 @@ const shortsLikeCount = document.getElementById("shortsLikeCount");
 const shortsDislikeCount = document.getElementById("shortsDislikeCount");
 const shortsCommentInput = document.getElementById("shortsCommentInput");
 const shortsCommentBtn = document.getElementById("shortsCommentBtn");
+const shortsPlayerWrap = document.getElementById("shortsPlayerWrap");
 const importStatus = document.getElementById("importStatus");
 const importLabel = document.getElementById("importLabel");
 const importBarFill = document.getElementById("importBarFill");
@@ -54,6 +60,10 @@ let state = {
   activeFolder: null,
   shuffleMode: false,
   shuffledIds: [],
+  videoTypeFilter: "regular",
+  dateSort: "none",
+  durationMin: null,
+  durationMax: null,
   visibleCount: PAGE_SIZE,
   renderedCount: 0,
   isEditing: false,
@@ -244,9 +254,25 @@ const getFilteredVideos = () => {
   if (state.activeFolder) {
     base = base.filter((video) => video.folderName === state.activeFolder);
   }
+  if (state.videoTypeFilter === "shorts") {
+    base = base.filter((video) => video.duration && video.duration <= 60);
+  } else if (state.videoTypeFilter === "regular") {
+    base = base.filter((video) => !video.duration || video.duration > 60);
+  }
+  if (state.durationMin !== null) {
+    base = base.filter((video) => (video.duration || 0) / 60 >= state.durationMin);
+  }
+  if (state.durationMax !== null) {
+    base = base.filter((video) => (video.duration || 0) / 60 <= state.durationMax);
+  }
   if (state.searchTerm) {
     const term = state.searchTerm.toLowerCase();
     base = base.filter((video) => video.title.toLowerCase().includes(term));
+  }
+  if (state.dateSort === "newest") {
+    base = [...base].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  } else if (state.dateSort === "oldest") {
+    base = [...base].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
   }
   return base;
 };
@@ -257,6 +283,10 @@ const setShuffleFeed = () => {
   if (searchInput) {
     searchInput.value = "";
   }
+  state.videoTypeFilter = "regular";
+  filterButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.type === "regular");
+  });
   state.shuffleMode = true;
   state.shuffledIds = shuffle(state.videos).map((video) => video.id);
   switchView("library");
@@ -271,10 +301,15 @@ const buildVideoCard = (video) => {
   card.querySelector(".meta").textContent = video.channelName || video.folderName || "Без папки";
   const element = card.querySelector(".video-card");
   const thumbnail = card.querySelector(".thumbnail");
+  const progressFill = card.querySelector(".progress-fill");
   if (video.thumbnail) {
     thumbnail.style.backgroundImage = `url(${video.thumbnail})`;
   } else {
     thumbnail.style.backgroundImage = "";
+  }
+  if (progressFill) {
+    const percent = video.duration ? Math.min(100, (video.progress / video.duration) * 100) : 0;
+    progressFill.style.width = `${percent}%`;
   }
   if (video.watched) {
     element.classList.add("is-watched");
@@ -312,8 +347,28 @@ const updateWatchedIndicator = (videoId, watched) => {
   card.classList.toggle("is-watched", Boolean(watched));
 };
 
+const updateProgressIndicator = (videoId, progress, duration) => {
+  const card = videoGrid.querySelector(`[data-video-id="${videoId}"]`);
+  if (!card) return;
+  const fill = card.querySelector(".progress-fill");
+  if (!fill) return;
+  const percent = duration ? Math.min(100, (progress / duration) * 100) : 0;
+  fill.style.width = `${percent}%`;
+};
+
 const shouldIncludeVideo = (video) => {
   if (state.activeFolder && video.folderName !== state.activeFolder) return false;
+  if (state.videoTypeFilter === "shorts") {
+    if (!video.duration || video.duration > 60) return false;
+  } else if (state.videoTypeFilter === "regular") {
+    if (video.duration && video.duration <= 60) return false;
+  }
+  if (state.durationMin !== null && (video.duration || 0) / 60 < state.durationMin) {
+    return false;
+  }
+  if (state.durationMax !== null && (video.duration || 0) / 60 > state.durationMax) {
+    return false;
+  }
   if (state.searchTerm) {
     return video.title.toLowerCase().includes(state.searchTerm.toLowerCase());
   }
@@ -336,6 +391,7 @@ const renderRecommendations = (currentVideo) => {
   const words = extractWords(currentVideo.title);
   const sorted = [...state.videos]
     .filter((video) => video.id !== currentVideo.id)
+    .filter((video) => !video.duration || video.duration > 60)
     .map((video) => ({
       video,
       score: scoreMatch(video.title, words),
@@ -407,11 +463,11 @@ const openVideo = async (videoId) => {
   const url = URL.createObjectURL(file);
   videoPlayer.src = url;
   videoPlayer.currentTime = video.progress || 0;
-  if (!video.watched) {
-    video.watched = true;
-    await updateActiveVideo({ watched: true });
-    updateWatchedIndicator(video.id, true);
-  }
+    if (!video.watched) {
+      video.watched = true;
+      await updateActiveVideo({ watched: true });
+      updateWatchedIndicator(video.id, true);
+    }
   progressLabel.textContent =
     video.progress && video.duration
       ? `Последняя остановка: ${humanizeDuration(video.progress)} / ${video.durationLabel}`
@@ -465,10 +521,17 @@ const refreshVideoMetadata = async (video) => {
     duration,
     durationLabel: humanizeDuration(duration),
     thumbnail,
+    createdAt: file.lastModified || Date.now(),
   };
 };
 
-const walkFolder = async (directoryHandle, rootName, path = "", files = []) => {
+const walkFolder = async (
+  directoryHandle,
+  rootName,
+  path = "",
+  files = [],
+  folderHandles = new Map()
+) => {
   try {
     for await (const entry of directoryHandle.values()) {
       try {
@@ -485,9 +548,12 @@ const walkFolder = async (directoryHandle, rootName, path = "", files = []) => {
           const permitted = await verifyPermission(entry);
           if (!permitted) {
             console.warn(`Нет доступа к подпапке ${entry.name}`);
+            continue;
           }
           const nextPath = path ? `${path}/${entry.name}` : entry.name;
-          await walkFolder(entry, rootName, nextPath, files);
+          const folderPath = `${rootName}/${nextPath}`;
+          folderHandles.set(folderPath, entry);
+          await walkFolder(entry, rootName, nextPath, files, folderHandles);
         }
       } catch (error) {
         console.warn("Не удалось обработать элемент", entry?.name, error);
@@ -496,7 +562,7 @@ const walkFolder = async (directoryHandle, rootName, path = "", files = []) => {
   } catch (error) {
     console.warn("Не удалось прочитать подпапку", error);
   }
-  return files;
+  return { files, folderHandles };
 };
 
 const addFolder = async () => {
@@ -509,25 +575,24 @@ const addFolder = async () => {
     return;
   }
   try {
-    const handle = await window.showDirectoryPicker();
+    let handle;
+    try {
+      handle = await window.showDirectoryPicker();
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        return;
+      }
+      throw error;
+    }
     const permitted = await verifyPermission(handle);
     if (!permitted) {
       alert("Нужен доступ к папке, чтобы импортировать видео.");
       return;
     }
-    const folder = {
-      id: `${handle.name}-${crypto.randomUUID()}`,
-      name: handle.name,
-      handle,
-    };
-
-    state.folders.push(folder);
-    await putItem(FOLDER_STORE, folder);
-    renderFolders();
-
-    const entries = await walkFolder(handle, handle.name);
+    const { files: entries, folderHandles } = await walkFolder(handle, handle.name);
     if (!entries.length) {
       alert("Видео не найдены. Проверьте, что папка содержит файлы mp4/webm/mkv/mov.");
+      return;
     }
 
     const total = entries.length;
@@ -548,6 +613,22 @@ const addFolder = async () => {
 
     updateImportStatus();
 
+    const folderNames = new Set(entries.map((entry) => entry.parentPath || handle.name));
+    folderNames.add(handle.name);
+    folderHandles.set(handle.name, handle);
+    const existingFolders = new Set(state.folders.map((folder) => folder.name));
+    for (const name of folderNames) {
+      if (existingFolders.has(name)) continue;
+      const folder = {
+        id: `${name}-${crypto.randomUUID()}`,
+        name,
+        handle: folderHandles.get(name),
+      };
+      state.folders.push(folder);
+      await putItem(FOLDER_STORE, folder);
+    }
+    renderFolders();
+
     for (const entry of entries) {
       const fileHandle = entry.handle;
       const id = idFromHandle(fileHandle, crypto.randomUUID(), entry.relativePath);
@@ -555,7 +636,7 @@ const addFolder = async () => {
       const video = {
         id,
         title: fileHandle.name.replace(/\.[^.]+$/, ""),
-        folderName: handle.name,
+        folderName: entry.parentPath || handle.name,
         channelName: entry.parentPath || handle.name,
         relativePath: entry.relativePath,
         handle: fileHandle,
@@ -607,6 +688,17 @@ const shuffle = (list) => {
   return array;
 };
 
+const updateShortsPlaybackState = () => {
+  if (!shortsPlayBtn) return;
+  shortsPlayBtn.textContent = shortsPlayer.paused ? "▶" : "⏸";
+};
+
+const updateShortsLayout = () => {
+  if (!shortsPlayerWrap) return;
+  const isWide = shortsPlayer.videoWidth >= shortsPlayer.videoHeight;
+  shortsPlayerWrap.classList.toggle("wide", isWide);
+};
+
 const buildShortsQueue = () => {
   const shorts = state.videos.filter((video) => video.duration && video.duration <= 60);
   const unseen = shorts.filter((video) => !video.watched);
@@ -640,7 +732,9 @@ const openShorts = async (direction = 0) => {
   const file = await video.handle.getFile();
   const url = URL.createObjectURL(file);
   shortsPlayer.src = url;
-  shortsPlayer.play();
+  updateShortsPlaybackState();
+  await shortsPlayer.play();
+  updateShortsPlaybackState();
   shortsTitle.textContent = video.title;
   shortsChannel.textContent = video.channelName || video.folderName || "Без канала";
   shortsStatus.textContent = `Видео ${state.shortsIndex + 1} из ${state.shortsQueue.length}`;
@@ -650,6 +744,7 @@ const openShorts = async (direction = 0) => {
   if (!video.watched) {
     video.watched = true;
     await putItem(VIDEO_STORE, video);
+    updateWatchedIndicator(video.id, true);
   }
 };
 
@@ -719,6 +814,41 @@ searchInput.addEventListener("input", (event) => {
   renderVideos({ reset: true });
 });
 
+filterButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    filterButtons.forEach((item) => item.classList.remove("active"));
+    button.classList.add("active");
+    state.videoTypeFilter = button.dataset.type || "regular";
+    renderVideos({ reset: true });
+  });
+});
+
+if (dateSort) {
+  dateSort.addEventListener("change", (event) => {
+    state.dateSort = event.target.value;
+    renderVideos({ reset: true });
+  });
+}
+
+const parseDurationInput = (value) => {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const handleDurationFilter = () => {
+  state.durationMin = parseDurationInput(durationMinInput?.value);
+  state.durationMax = parseDurationInput(durationMaxInput?.value);
+  renderVideos({ reset: true });
+};
+
+if (durationMinInput) {
+  durationMinInput.addEventListener("input", handleDurationFilter);
+}
+
+if (durationMaxInput) {
+  durationMaxInput.addEventListener("input", handleDurationFilter);
+}
+
 likeBtn.addEventListener("click", async () => {
   const current = state.videos.find((item) => item.id === state.activeVideoId);
   if (!current) return;
@@ -756,6 +886,7 @@ videoPlayer.addEventListener("timeupdate", () => {
   if (!current) return;
   const progress = videoPlayer.currentTime;
   updateActiveVideo({ progress });
+  updateProgressIndicator(current.id, progress, current.duration);
   if (current.duration) {
     progressLabel.textContent = `Последняя остановка: ${humanizeDuration(progress)} / ${
       current.durationLabel
@@ -847,5 +978,19 @@ window.addEventListener("wheel", (event) => {
     openShorts(-1);
   }
 });
+
+shortsPlayer.addEventListener("loadedmetadata", updateShortsLayout);
+shortsPlayer.addEventListener("play", updateShortsPlaybackState);
+shortsPlayer.addEventListener("pause", updateShortsPlaybackState);
+
+if (shortsPlayBtn) {
+  shortsPlayBtn.addEventListener("click", () => {
+    if (shortsPlayer.paused) {
+      shortsPlayer.play();
+    } else {
+      shortsPlayer.pause();
+    }
+  });
+}
 
 loadState();
