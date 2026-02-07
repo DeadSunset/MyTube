@@ -41,8 +41,7 @@ const shortsLikeCount = document.getElementById("shortsLikeCount");
 const shortsDislikeCount = document.getElementById("shortsDislikeCount");
 const shortsCommentInput = document.getElementById("shortsCommentInput");
 const shortsCommentBtn = document.getElementById("shortsCommentBtn");
-const shortsHistoryBtn = document.getElementById("shortsHistoryBtn");
-const shortsHistoryList = document.getElementById("shortsHistoryList");
+const historyTab = document.getElementById("historyTab");
 const shortsPlayerWrap = document.getElementById("shortsPlayerWrap");
 const importStatus = document.getElementById("importStatus");
 const importLabel = document.getElementById("importLabel");
@@ -75,6 +74,7 @@ let state = {
   sessionSeenShorts: new Set(),
   activeShortsId: null,
   watchedHistory: [],
+  historyMode: false,
 };
 
 const openDb = () =>
@@ -218,26 +218,6 @@ const saveWatchedHistory = () => {
   }
 };
 
-const renderWatchedHistory = () => {
-  if (!shortsHistoryList) return;
-  shortsHistoryList.innerHTML = "";
-  const items = [...state.watchedHistory]
-    .sort((a, b) => b.watchedAt - a.watchedAt)
-    .slice(0, 20);
-  if (!items.length) {
-    const empty = document.createElement("li");
-    empty.textContent = "История пуста";
-    shortsHistoryList.appendChild(empty);
-    return;
-  }
-  items.forEach((item) => {
-    const li = document.createElement("li");
-    const date = new Date(item.watchedAt).toLocaleString("ru-RU");
-    li.textContent = `${item.title} • ${date}`;
-    shortsHistoryList.appendChild(li);
-  });
-};
-
 const recordWatch = (video) => {
   if (!video) return;
   const existingIndex = state.watchedHistory.findIndex((entry) => entry.id === video.id);
@@ -252,7 +232,9 @@ const recordWatch = (video) => {
   state.watchedHistory.unshift(record);
   state.watchedHistory = state.watchedHistory.slice(0, 200);
   saveWatchedHistory();
-  renderWatchedHistory();
+  if (state.historyMode) {
+    renderVideos({ reset: true });
+  }
 };
 
 const loadState = async () => {
@@ -278,7 +260,6 @@ const loadState = async () => {
   state.folders = folders || [];
   state.shuffledIds = [];
   loadWatchedHistory();
-  renderWatchedHistory();
   renderFolders();
   renderVideos({ reset: true });
   await normalizeVideoMetadata();
@@ -323,6 +304,7 @@ const renderFolders = () => {
     li.addEventListener("click", () => {
       state.activeFolder = folder.name;
       state.shuffleMode = false;
+      state.historyMode = false;
       state.shuffledIds = [];
       switchView("library");
       renderFolders();
@@ -338,6 +320,15 @@ const renderFolders = () => {
 
 const getFilteredVideos = () => {
   let base = state.videos;
+  if (state.historyMode) {
+    const historyMap = new Map(state.videos.map((video) => [video.id, video]));
+    base = state.watchedHistory
+      .slice()
+      .sort((a, b) => b.watchedAt - a.watchedAt)
+      .map((entry) => historyMap.get(entry.id))
+      .filter(Boolean);
+    return base;
+  }
   if (state.shuffleMode) {
     if (!state.shuffledIds.length) {
       state.shuffledIds = shuffle(state.videos).map((video) => video.id);
@@ -372,6 +363,23 @@ const getFilteredVideos = () => {
   return base;
 };
 
+const setHistoryFeed = () => {
+  state.activeFolder = null;
+  state.searchTerm = "";
+  if (searchInput) {
+    searchInput.value = "";
+  }
+  state.shuffleMode = false;
+  state.historyMode = true;
+  state.shuffledIds = [];
+  filterButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.type === "regular");
+  });
+  switchView("library");
+  renderFolders();
+  renderVideos({ reset: true });
+};
+
 const setShuffleFeed = () => {
   state.activeFolder = null;
   state.searchTerm = "";
@@ -379,6 +387,7 @@ const setShuffleFeed = () => {
     searchInput.value = "";
   }
   state.videoTypeFilter = "regular";
+  state.historyMode = false;
   filterButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.type === "regular");
   });
@@ -986,9 +995,15 @@ shortsTab.addEventListener("click", () => {
   buildShortsQueue();
   openShorts(0);
 });
+if (historyTab) {
+  historyTab.addEventListener("click", () => {
+    setHistoryFeed();
+  });
+}
 
 searchInput.addEventListener("input", (event) => {
   state.searchTerm = event.target.value;
+  state.historyMode = false;
   renderVideos({ reset: true });
 });
 
@@ -997,6 +1012,7 @@ filterButtons.forEach((button) => {
     filterButtons.forEach((item) => item.classList.remove("active"));
     button.classList.add("active");
     state.videoTypeFilter = button.dataset.type || "regular";
+    state.historyMode = false;
     renderVideos({ reset: true });
   });
 });
@@ -1004,6 +1020,7 @@ filterButtons.forEach((button) => {
 if (dateSort) {
   dateSort.addEventListener("change", (event) => {
     state.dateSort = event.target.value;
+    state.historyMode = false;
     renderVideos({ reset: true });
   });
 }
@@ -1016,6 +1033,7 @@ const parseDurationInput = (value) => {
 const handleDurationFilter = () => {
   state.durationMin = parseDurationInput(durationMinInput?.value);
   state.durationMax = parseDurationInput(durationMaxInput?.value);
+  state.historyMode = false;
   renderVideos({ reset: true });
 };
 
@@ -1169,13 +1187,6 @@ if (shortsPlayBtn) {
     } else {
       shortsPlayer.pause();
     }
-  });
-}
-
-if (shortsHistoryBtn) {
-  shortsHistoryBtn.addEventListener("click", () => {
-    if (!shortsHistoryList) return;
-    shortsHistoryList.classList.toggle("hidden");
   });
 }
 
