@@ -181,6 +181,37 @@ body {
   transition: width 0.2s ease;
 }
 
+.import-status {
+  margin-top: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.import-status.hidden {
+  display: none;
+}
+
+.import-label {
+  font-size: 12px;
+}
+
+.import-bar {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.import-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #ff5f6d, #ffc371);
+  width: 0%;
+  transition: width 0.2s ease;
+}
+
 .content {
   flex: 1;
   padding: 24px;
