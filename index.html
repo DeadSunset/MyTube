@@ -9,11 +9,12 @@
   <body>
     <div class="app">
       <header class="topbar">
-        <a class="logo" href="index.html">MyTube</a>
+        <a class="logo" id="logoLink" href="index.html">MyTube</a>
         <div class="search">
           <input id="searchInput" type="search" placeholder="Поиск" />
         </div>
         <button id="addFolderBtn" class="btn">Добавить папку</button>
+        <input id="folderInput" type="file" webkitdirectory multiple hidden />
         <button id="editLibraryBtn" class="btn">Редактировать</button>
       </header>
 
@@ -26,13 +27,42 @@
             </button>
           </div>
           <ul id="folderList" class="folder-list"></ul>
+          <div id="importStatus" class="import-status hidden">
+            <span id="importLabel" class="import-label muted">Импорт: 0 / 0</span>
+            <div class="import-bar">
+              <div id="importBarFill" class="import-bar-fill" style="width: 0%"></div>
+            </div>
+          </div>
         </aside>
 
         <section class="content">
           <div id="libraryView" class="view active">
             <div class="section-header">
-              <h2>Все видео</h2>
-              <span id="videoCount" class="muted"></span>
+              <div>
+                <h2>Все видео</h2>
+                <span id="videoCount" class="muted"></span>
+              </div>
+              <div class="filters">
+                <div class="filter-group">
+                  <button class="filter-btn active" data-type="regular">Обычные</button>
+                  <button class="filter-btn" data-type="shorts">Шортсы</button>
+                </div>
+                <label class="filter-label">
+                  Дата
+                  <select id="dateSort">
+                    <option value="none">Без сортировки</option>
+                    <option value="newest">Сначала новые</option>
+                    <option value="oldest">Сначала старые</option>
+                  </select>
+                </label>
+                <label class="filter-label">
+                  Длительность (мин)
+                  <div class="duration-filter">
+                    <input id="durationMin" type="number" min="0" placeholder="от" />
+                    <input id="durationMax" type="number" min="0" placeholder="до" />
+                  </div>
+                </label>
+              </div>
             </div>
             <div id="videoGrid" class="video-grid"></div>
           </div>
@@ -71,10 +101,11 @@
 
           <div id="shortsView" class="view">
             <div class="shorts-layout">
-              <div class="shorts-player">
+              <div class="shorts-player" id="shortsPlayerWrap">
                 <video id="shortsPlayer" playsinline></video>
                 <div class="shorts-controls">
                   <button id="shortsPrevBtn" class="btn">▲</button>
+                  <button id="shortsPlayBtn" class="btn">⏯</button>
                   <button id="shortsNextBtn" class="btn">▼</button>
                 </div>
               </div>
@@ -85,6 +116,10 @@
                 <div class="shorts-actions">
                   <button id="shortsLikeBtn" class="btn">👍 <span id="shortsLikeCount">0</span></button>
                   <button id="shortsDislikeBtn" class="btn">👎 <span id="shortsDislikeCount">0</span></button>
+                </div>
+                <div class="shorts-history">
+                  <button id="shortsHistoryBtn" class="btn">Просмотренные</button>
+                  <ul id="shortsHistoryList" class="shorts-history-list hidden"></ul>
                 </div>
                 <div class="shorts-comment">
                   <textarea id="shortsCommentInput" rows="3" placeholder="Комментарий..."></textarea>
@@ -100,7 +135,11 @@
     <template id="videoCardTemplate">
       <article class="video-card">
         <div class="thumbnail">
+          <span class="watched-indicator" aria-label="Просмотрено">⏰</span>
           <span class="duration"></span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill"></div>
         </div>
         <div class="video-info">
           <h4 class="title"></h4>
