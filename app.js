@@ -345,17 +345,25 @@ const refreshVideoMetadata = async (video) => {
   tempVideo.preload = "metadata";
   tempVideo.src = tempUrl;
 
-  await new Promise((resolve) => {
-    tempVideo.onloadedmetadata = () => resolve();
+  const duration = await new Promise((resolve) => {
+    const timeout = setTimeout(() => resolve(Number.NaN), 2000);
+    tempVideo.onloadedmetadata = () => {
+      clearTimeout(timeout);
+      resolve(tempVideo.duration);
+    };
+    tempVideo.onerror = () => {
+      clearTimeout(timeout);
+      resolve(Number.NaN);
+    };
   });
 
-  const duration = tempVideo.duration;
   let thumbnail = "";
   if (Number.isFinite(duration) && duration > 0) {
     const target = Math.min(duration - 0.2, Math.max(0.2, Math.random() * duration));
     await new Promise((resolve) => {
-      tempVideo.currentTime = target;
       tempVideo.onseeked = () => resolve();
+      tempVideo.onerror = () => resolve();
+      tempVideo.currentTime = target;
     });
     const canvas = document.createElement("canvas");
     const ratio = tempVideo.videoWidth && tempVideo.videoHeight
@@ -379,6 +387,10 @@ const refreshVideoMetadata = async (video) => {
 };
 
 const walkFolder = async (directoryHandle, files = []) => {
+  const permitted = await verifyPermission(directoryHandle);
+  if (!permitted) {
+    return files;
+  }
   for await (const entry of directoryHandle.values()) {
     if (entry.kind === "file") {
       if (entry.name.match(/\.(mp4|webm|mkv|mov)$/i)) {
@@ -396,46 +408,51 @@ const addFolder = async () => {
     alert("Ваш браузер не поддерживает выбор папок. Откройте в Chrome/Edge.");
     return;
   }
-  const handle = await window.showDirectoryPicker();
-  const permitted = await verifyPermission(handle);
-  if (!permitted) {
-    alert("Нужен доступ к папке, чтобы импортировать видео.");
-    return;
-  }
-  const folder = {
-    id: `${handle.name}-${crypto.randomUUID()}`,
-    name: handle.name,
-    handle,
-  };
-
-  state.folders.push(folder);
-  await putItem(FOLDER_STORE, folder);
-  renderFolders();
-
-  const entries = await walkFolder(handle);
-
-  for (const entry of entries) {
-    const fileHandle = entry.handle;
-    const id = idFromHandle(fileHandle, crypto.randomUUID());
-    const metadata = await refreshVideoMetadata({ handle: fileHandle });
-    const video = {
-      id,
-      title: fileHandle.name.replace(/\.[^.]+$/, ""),
-      folderName: handle.name,
-      channelName: entry.parent || handle.name,
-      handle: fileHandle,
-      ...metadata,
-      likes: 0,
-      dislikes: 0,
-      comments: [],
-      progress: 0,
-      watched: false,
+  try {
+    const handle = await window.showDirectoryPicker();
+    const permitted = await verifyPermission(handle);
+    if (!permitted) {
+      alert("Нужен доступ к папке, чтобы импортировать видео.");
+      return;
+    }
+    const folder = {
+      id: `${handle.name}-${crypto.randomUUID()}`,
+      name: handle.name,
+      handle,
     };
-    state.videos.push(video);
-    await putItem(VIDEO_STORE, video);
-  }
 
-  renderVideos({ reset: true });
+    state.folders.push(folder);
+    await putItem(FOLDER_STORE, folder);
+    renderFolders();
+
+    const entries = await walkFolder(handle);
+
+    for (const entry of entries) {
+      const fileHandle = entry.handle;
+      const id = idFromHandle(fileHandle, crypto.randomUUID());
+      const metadata = await refreshVideoMetadata({ handle: fileHandle });
+      const video = {
+        id,
+        title: fileHandle.name.replace(/\.[^.]+$/, ""),
+        folderName: handle.name,
+        channelName: entry.parent || handle.name,
+        handle: fileHandle,
+        ...metadata,
+        likes: 0,
+        dislikes: 0,
+        comments: [],
+        progress: 0,
+        watched: false,
+      };
+      state.videos.push(video);
+      await putItem(VIDEO_STORE, video);
+    }
+
+    renderVideos({ reset: true });
+  } catch (error) {
+    console.error(error);
+    alert("Не удалось импортировать видео. Проверьте доступ к папке.");
+  }
 };
 
 const updateActiveVideo = async (updates) => {
