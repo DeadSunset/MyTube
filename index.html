@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MyTube Offline</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <a class="logo" href="index.html">MyTube</a>
+        <div class="search">
+          <input id="searchInput" type="search" placeholder="Поиск" />
+        </div>
+        <button id="addFolderBtn" class="btn">Добавить папку</button>
+        <button id="editLibraryBtn" class="btn">Редактировать</button>
+      </header>
+
+      <main class="main">
+        <aside class="sidebar">
+          <div class="sidebar-header">
+            <button id="shortsTab" class="shorts-button">Шортсы</button>
+            <button id="libraryToggle" class="sidebar-toggle">
+              Библиотека <span class="chevron">▾</span>
+            </button>
+          </div>
+          <ul id="folderList" class="folder-list"></ul>
+        </aside>
+
+        <section class="content">
+          <div id="libraryView" class="view active">
+            <div class="section-header">
+              <h2>Все видео</h2>
+              <span id="videoCount" class="muted"></span>
+            </div>
+            <div id="videoGrid" class="video-grid"></div>
+          </div>
+
+          <div id="watchView" class="view">
+            <div class="watch-layout">
+              <div class="watch-main">
+                <div class="player-shell">
+                  <video id="videoPlayer" controls></video>
+                </div>
+                <div class="watch-meta">
+                  <h1 id="watchTitle"></h1>
+                  <div class="watch-actions">
+                    <button id="likeBtn" class="btn">👍 <span id="likeCount">0</span></button>
+                    <button id="dislikeBtn" class="btn">👎 <span id="dislikeCount">0</span></button>
+                    <span id="progressLabel" class="muted"></span>
+                  </div>
+                </div>
+                <div class="notes">
+                  <h3>Заметки / комментарии</h3>
+                  <div id="commentList" class="comment-list"></div>
+                  <div class="comment-form">
+                    <textarea id="commentInput" rows="3" placeholder="Ваши заметки..."></textarea>
+                    <div class="notes-actions">
+                      <button id="saveCommentBtn" class="btn">Отправить</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <aside class="watch-sidebar">
+                <h3>Похожие видео</h3>
+                <div id="recommendations" class="recommendations"></div>
+              </aside>
+            </div>
+          </div>
+
+          <div id="shortsView" class="view">
+            <div class="shorts-layout">
+              <div class="shorts-player">
+                <video id="shortsPlayer" playsinline></video>
+                <div class="shorts-controls">
+                  <button id="shortsPrevBtn" class="btn">▲</button>
+                  <button id="shortsNextBtn" class="btn">▼</button>
+                </div>
+              </div>
+              <div class="shorts-meta">
+                <h2 id="shortsTitle"></h2>
+                <p id="shortsChannel" class="muted"></p>
+                <p id="shortsStatus" class="muted"></p>
+                <div class="shorts-actions">
+                  <button id="shortsLikeBtn" class="btn">👍 <span id="shortsLikeCount">0</span></button>
+                  <button id="shortsDislikeBtn" class="btn">👎 <span id="shortsDislikeCount">0</span></button>
+                </div>
+                <div class="shorts-comment">
+                  <textarea id="shortsCommentInput" rows="3" placeholder="Комментарий..."></textarea>
+                  <button id="shortsCommentBtn" class="btn">Отправить</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <template id="videoCardTemplate">
+      <article class="video-card">
+        <div class="thumbnail">
+          <span class="duration"></span>
+        </div>
+        <div class="video-info">
+          <h4 class="title"></h4>
+          <p class="meta muted"></p>
+          <button class="delete-btn btn">Удалить</button>
+        </div>
+      </article>
+    </template>
+
+    <template id="recommendationTemplate">
+      <button class="recommendation">
+        <div>
+          <h4 class="title"></h4>
+          <p class="meta muted"></p>
+        </div>
+      </button>
+    </template>
+
+    <script src="app.js"></script>
+  </body>
+</html>
