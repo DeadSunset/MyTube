@@ -387,18 +387,18 @@ const refreshVideoMetadata = async (video) => {
 };
 
 const walkFolder = async (directoryHandle, files = []) => {
-  const permitted = await verifyPermission(directoryHandle);
-  if (!permitted) {
-    return files;
-  }
-  for await (const entry of directoryHandle.values()) {
-    if (entry.kind === "file") {
-      if (entry.name.match(/\.(mp4|webm|mkv|mov)$/i)) {
-        files.push({ handle: entry, parent: directoryHandle.name });
+  try {
+    for await (const entry of directoryHandle.values()) {
+      if (entry.kind === "file") {
+        if (entry.name.match(/\.(mp4|webm|mkv|mov)$/i)) {
+          files.push({ handle: entry, parent: directoryHandle.name });
+        }
+      } else if (entry.kind === "directory") {
+        await walkFolder(entry, files);
       }
-    } else if (entry.kind === "directory") {
-      await walkFolder(entry, files);
     }
+  } catch (error) {
+    console.warn("Не удалось прочитать подпапку", error);
   }
   return files;
 };
@@ -426,6 +426,9 @@ const addFolder = async () => {
     renderFolders();
 
     const entries = await walkFolder(handle);
+    if (!entries.length) {
+      alert("Видео не найдены. Проверьте, что папка содержит файлы mp4/webm/mkv/mov.");
+    }
 
     for (const entry of entries) {
       const fileHandle = entry.handle;
