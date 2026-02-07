@@ -108,7 +108,10 @@ const putItem = (storeName, value) =>
 const deleteItem = (storeName, key) =>
   withStore(storeName, "readwrite", (store) => store.delete(key));
 
-const idFromHandle = (handle, fallback) => {
+const idFromHandle = (handle, fallback, relativePath = "") => {
+  if (relativePath) {
+    return `${relativePath}-${fallback}`;
+  }
   if (handle?.name) {
     return `${handle.name}-${fallback}`;
   }
@@ -386,15 +389,26 @@ const refreshVideoMetadata = async (video) => {
   };
 };
 
-const walkFolder = async (directoryHandle, files = []) => {
+const walkFolder = async (directoryHandle, rootName, path = "", files = []) => {
   try {
     for await (const entry of directoryHandle.values()) {
       if (entry.kind === "file") {
         if (entry.name.match(/\.(mp4|webm|mkv|mov)$/i)) {
-          files.push({ handle: entry, parent: directoryHandle.name });
+          const relativePath = path ? `${path}/${entry.name}` : entry.name;
+          files.push({
+            handle: entry,
+            parentPath: path ? `${rootName}/${path}` : rootName,
+            relativePath,
+          });
         }
       } else if (entry.kind === "directory") {
-        await walkFolder(entry, files);
+        const permitted = await verifyPermission(entry);
+        if (!permitted) {
+          console.warn(`Нет доступа к подпапке ${entry.name}`);
+          continue;
+        }
+        const nextPath = path ? `${path}/${entry.name}` : entry.name;
+        await walkFolder(entry, rootName, nextPath, files);
       }
     }
   } catch (error) {
@@ -406,6 +420,10 @@ const walkFolder = async (directoryHandle, files = []) => {
 const addFolder = async () => {
   if (!window.showDirectoryPicker) {
     alert("Ваш браузер не поддерживает выбор папок. Откройте в Chrome/Edge.");
+    return;
+  }
+  if (!window.isSecureContext) {
+    alert("Импорт папок работает только на HTTPS или localhost.");
     return;
   }
   try {
@@ -425,20 +443,21 @@ const addFolder = async () => {
     await putItem(FOLDER_STORE, folder);
     renderFolders();
 
-    const entries = await walkFolder(handle);
+    const entries = await walkFolder(handle, handle.name);
     if (!entries.length) {
       alert("Видео не найдены. Проверьте, что папка содержит файлы mp4/webm/mkv/mov.");
     }
 
     for (const entry of entries) {
       const fileHandle = entry.handle;
-      const id = idFromHandle(fileHandle, crypto.randomUUID());
+      const id = idFromHandle(fileHandle, crypto.randomUUID(), entry.relativePath);
       const metadata = await refreshVideoMetadata({ handle: fileHandle });
       const video = {
         id,
         title: fileHandle.name.replace(/\.[^.]+$/, ""),
         folderName: handle.name,
-        channelName: entry.parent || handle.name,
+        channelName: entry.parentPath || handle.name,
+        relativePath: entry.relativePath,
         handle: fileHandle,
         ...metadata,
         likes: 0,
