@@ -7,6 +7,7 @@ const videoGrid = document.getElementById("videoGrid");
 const videoCount = document.getElementById("videoCount");
 const searchInput = document.getElementById("searchInput");
 const logoLink = document.getElementById("logoLink");
+const folderInput = document.getElementById("folderInput");
 const dateSort = document.getElementById("dateSort");
 const durationMinInput = document.getElementById("durationMin");
 const durationMaxInput = document.getElementById("durationMax");
@@ -137,6 +138,13 @@ const idFromHandle = (handle, fallback, relativePath = "") => {
 
 const buildFileKey = (file) => `${file.name}-${file.size}-${file.lastModified}`;
 
+const getVideoFile = async (video) => {
+  if (video.handle) {
+    return video.handle.getFile();
+  }
+  return video.file;
+};
+
 const humanizeDuration = (seconds) => {
   if (!Number.isFinite(seconds)) return "--:--";
   const total = Math.floor(seconds);
@@ -220,7 +228,7 @@ const normalizeVideoMetadata = async () => {
   for (const video of state.videos) {
     if (video.createdAt && video.fileKey) continue;
     try {
-      const file = await video.handle.getFile();
+      const file = await getVideoFile(video);
       if (!video.createdAt) {
         video.createdAt = file.lastModified || Date.now();
       }
@@ -488,7 +496,7 @@ const openVideo = async (videoId) => {
   commentInput.value = "";
   renderComments(video);
 
-  const file = await video.handle.getFile();
+  const file = await getVideoFile(video);
   const url = URL.createObjectURL(file);
   videoPlayer.src = url;
   videoPlayer.currentTime = video.progress || 0;
@@ -506,7 +514,7 @@ const openVideo = async (videoId) => {
 };
 
 const refreshVideoMetadata = async (video) => {
-  const file = await video.handle.getFile();
+  const file = await getVideoFile(video);
   const tempUrl = URL.createObjectURL(file);
   const tempVideo = document.createElement("video");
   tempVideo.preload = "metadata";
@@ -610,25 +618,7 @@ const resetImportStatus = () => {
   importBarFill.style.width = "0%";
 };
 
-const importFolderHandle = async (handle) => {
-  const permitted = await verifyPermission(handle);
-  if (!permitted) {
-    alert("Нужен доступ к папке, чтобы импортировать видео.");
-    return;
-  }
-  const { files: entries, folderHandles } = await walkFolder(handle, handle.name);
-  if (!entries.length) {
-    alert("Видео не найдены. Проверьте, что папка содержит файлы mp4/webm/mkv/mov.");
-    return;
-  }
-
-  const total = entries.length;
-  let processed = 0;
-  updateImportStatus(processed, total);
-
-  const folderNames = new Set(entries.map((entry) => entry.parentPath || handle.name));
-  folderNames.add(handle.name);
-  folderHandles.set(handle.name, handle);
+const ensureFolders = async (folderNames, folderHandles = new Map()) => {
   const existingFolders = new Set(state.folders.map((folder) => folder.name));
   for (const name of folderNames) {
     if (existingFolders.has(name)) continue;
@@ -641,25 +631,43 @@ const importFolderHandle = async (handle) => {
     await putItem(FOLDER_STORE, folder);
   }
   renderFolders();
+};
+
+const importEntries = async (entries, folderHandles = new Map(), rootName = "") => {
+  if (!entries.length) {
+    alert("Видео не найдены. Проверьте, что папка содержит файлы mp4/webm/mkv/mov.");
+    return;
+  }
+
+  const total = entries.length;
+  let processed = 0;
+  updateImportStatus(processed, total);
+  await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+
+  const folderNames = new Set(entries.map((entry) => entry.parentPath || rootName));
+  if (rootName) {
+    folderNames.add(rootName);
+  }
+  await ensureFolders(folderNames, folderHandles);
 
   const existingKeys = new Set(state.videos.map((video) => video.fileKey).filter(Boolean));
   for (const entry of entries) {
-    const fileHandle = entry.handle;
-    const id = idFromHandle(fileHandle, crypto.randomUUID(), entry.relativePath);
-    const metadata = await refreshVideoMetadata({ handle: fileHandle });
+    const metadata = await refreshVideoMetadata(entry);
     processed += 1;
     updateImportStatus(processed, total);
     if (metadata.fileKey && existingKeys.has(metadata.fileKey)) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 16));
       continue;
     }
+    const title = entry.name.replace(/\.[^.]+$/, "");
     const video = {
-      id,
-      title: fileHandle.name.replace(/\.[^.]+$/, ""),
-      folderName: entry.parentPath || handle.name,
-      channelName: entry.parentPath || handle.name,
+      id: idFromHandle(entry.handle, crypto.randomUUID(), entry.relativePath),
+      title,
+      folderName: entry.parentPath || rootName,
+      channelName: entry.parentPath || rootName,
       relativePath: entry.relativePath,
-      handle: fileHandle,
+      handle: entry.handle,
+      file: entry.file,
       ...metadata,
       likes: 0,
       dislikes: 0,
@@ -673,14 +681,29 @@ const importFolderHandle = async (handle) => {
     }
     await putItem(VIDEO_STORE, video);
     appendVideoToGrid(video);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 16));
   }
 
   renderVideos({ reset: true });
   setTimeout(resetImportStatus, 800);
 };
 
+const importFolderHandle = async (handle) => {
+  const permitted = await verifyPermission(handle);
+  if (!permitted) {
+    alert("Нужен доступ к папке, чтобы импортировать видео.");
+    return;
+  }
+  const { files: entries, folderHandles } = await walkFolder(handle, handle.name);
+  folderHandles.set(handle.name, handle);
+  await importEntries(entries, folderHandles, handle.name);
+};
+
 const addFolder = async () => {
+  if (folderInput) {
+    folderInput.click();
+    return;
+  }
   if (!window.showDirectoryPicker) {
     alert("Ваш браузер не поддерживает выбор папок. Откройте в Chrome/Edge.");
     return;
@@ -689,43 +712,49 @@ const addFolder = async () => {
     alert("Импорт папок работает только на HTTPS или localhost.");
     return;
   }
-  const handles = [];
-  while (true) {
-    let handle;
-    try {
-      handle = await window.showDirectoryPicker();
-    } catch (error) {
-      if (error?.name === "AbortError") {
-        break;
-      }
-      console.error(error);
-      alert("Не удалось импортировать видео. Проверьте доступ к папке.");
+  try {
+    const handle = await window.showDirectoryPicker();
+    await importFolderHandle(handle);
+  } catch (error) {
+    if (error?.name === "AbortError") {
       return;
     }
-    handles.push(handle);
-    const shouldContinue = confirm("Добавить ещё папку?");
-    if (!shouldContinue) {
-      break;
-    }
+    console.error(error);
+    alert("Не удалось импортировать видео. Проверьте доступ к папке.");
   }
-  if (!handles.length) return;
-  for (const handle of handles) {
-    try {
-      await importFolderHandle(handle);
-    } catch (error) {
-      console.error(error);
-      alert("Не удалось импортировать видео. Проверьте доступ к папке.");
-      if (importStatus) {
-        importStatus.classList.remove("hidden");
-      }
-      if (importLabel) {
-        importLabel.textContent = "Импорт прерван";
-      }
-      if (importBarFill) {
-        importBarFill.style.width = "0%";
-      }
-      break;
-    }
+};
+
+const handleFolderFiles = async (event) => {
+  const files = Array.from(event.target.files || []);
+  event.target.value = "";
+  if (!files.length) return;
+  const entries = [];
+  const folderNames = new Set();
+  files.forEach((file) => {
+    if (!file.name.match(/\.(mp4|webm|mkv|mov)$/i)) return;
+    const relativePath = file.webkitRelativePath || file.name;
+    const parts = relativePath.split("/");
+    const rootName = parts[0] || "Импорт";
+    const parentPath = parts.length > 1 ? parts.slice(0, -1).join("/") : rootName;
+    folderNames.add(parentPath);
+    entries.push({
+      handle: null,
+      file,
+      name: file.name,
+      relativePath,
+      parentPath,
+    });
+  });
+  if (!entries.length) {
+    alert("Видео не найдены. Проверьте, что папка содержит файлы mp4/webm/mkv/mov.");
+    return;
+  }
+  try {
+    await ensureFolders(folderNames);
+    await importEntries(entries);
+  } catch (error) {
+    console.error(error);
+    alert("Не удалось импортировать видео. Проверьте доступ к папке.");
   }
 };
 
@@ -793,7 +822,7 @@ const openShorts = async (direction = 0) => {
   const video = state.shortsQueue[state.shortsIndex];
   state.activeShortsId = video.id;
   state.sessionSeenShorts.add(video.id);
-  const file = await video.handle.getFile();
+  const file = await getVideoFile(video);
   const url = URL.createObjectURL(file);
   shortsPlayer.src = url;
   updateShortsPlaybackState();
@@ -859,6 +888,9 @@ const handleScroll = () => {
 };
 
 addFolderBtn.addEventListener("click", addFolder);
+if (folderInput) {
+  folderInput.addEventListener("change", handleFolderFiles);
+}
 editLibraryBtn.addEventListener("click", toggleEditing);
 libraryToggle.addEventListener("click", toggleLibraryList);
 if (logoLink) {
