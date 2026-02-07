@@ -16,6 +16,7 @@
         <button id="addFolderBtn" class="btn">Добавить папку</button>
         <input id="folderInput" type="file" webkitdirectory multiple hidden />
         <button id="editLibraryBtn" class="btn">Редактировать</button>
+        <button id="profileBtn" class="btn">Профиль</button>
       </header>
 
       <main class="main">
@@ -126,6 +127,18 @@
                   <textarea id="shortsCommentInput" rows="3" placeholder="Комментарий..."></textarea>
                   <button id="shortsCommentBtn" class="btn">Отправить</button>
                 </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="profileView" class="view">
+            <div class="profile-panel">
+              <h2>Личный кабинет</h2>
+              <p class="muted">Сохраните бекап библиотеки или восстановите его позже.</p>
+              <div class="profile-actions">
+                <button id="exportBackupBtn" class="btn">Создать бекап</button>
+                <label class="btn" for="importBackupInput">Импорт бекапа</label>
+                <input id="importBackupInput" type="file" accept="application/json" hidden />
               </div>
             </div>
           </div>

@@ -3,7 +3,7 @@
   --bg: #0f0f0f;
   --panel: #181818;
   --panel-2: #202020;
-  --accent: #ff0000;
+  --accent: #d7ff00;
   --text: #f1f1f1;
   --muted: #a0a0a0;
 }
@@ -105,8 +105,8 @@ body {
 }
 
 .shorts-button {
-  background: #ff2d2d;
-  color: #fff;
+  background: #d7ff00;
+  color: #111;
   border: none;
   border-radius: 10px;
   padding: 8px 12px;
@@ -120,7 +120,7 @@ body {
 }
 
 .history-button {
-  background: #c61f1f;
+  background: #d7ff00;
 }
 
 .sidebar-toggle .chevron {
@@ -180,7 +180,7 @@ body {
 
 .import-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, #ff5f6d, #ffc371);
+  background: #d7ff00;
   width: 0%;
   transition: width 0.2s ease;
 }
@@ -196,6 +196,21 @@ body {
 
 .view.active {
   display: block;
+}
+
+.profile-panel {
+  background: var(--panel);
+  border: 1px solid #262626;
+  border-radius: 8px;
+  padding: 24px;
+  max-width: 520px;
+}
+
+.profile-actions {
+  margin-top: 16px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .section-header {
@@ -230,8 +245,8 @@ body {
 }
 
 .filter-btn.active {
-  border-color: #ff5f6d;
-  color: #ffb3b9;
+  border-color: #d7ff00;
+  color: #d7ff00;
 }
 
 .filter-label {
@@ -307,7 +322,7 @@ body {
   top: 8px;
   right: 8px;
   font-size: 28px;
-  color: #ff2e2e;
+  color: #d7ff00;
   opacity: 0;
   transition: opacity 0.2s ease;
 }
@@ -341,7 +356,7 @@ body {
 .progress-fill {
   height: 100%;
   width: 0%;
-  background: #ff2e2e;
+  background: #d7ff00;
 }
 
 .duration {

@@ -15,6 +15,7 @@ const filterButtons = document.querySelectorAll(".filter-btn");
 const libraryView = document.getElementById("libraryView");
 const watchView = document.getElementById("watchView");
 const shortsView = document.getElementById("shortsView");
+const profileView = document.getElementById("profileView");
 const videoPlayer = document.getElementById("videoPlayer");
 const watchTitle = document.getElementById("watchTitle");
 const likeBtn = document.getElementById("likeBtn");
@@ -46,6 +47,9 @@ const shortsPlayerWrap = document.getElementById("shortsPlayerWrap");
 const importStatus = document.getElementById("importStatus");
 const importLabel = document.getElementById("importLabel");
 const importBarFill = document.getElementById("importBarFill");
+const profileBtn = document.getElementById("profileBtn");
+const exportBackupBtn = document.getElementById("exportBackupBtn");
+const importBackupInput = document.getElementById("importBackupInput");
 
 const DB_NAME = "mytube-db";
 const DB_VERSION = 1;
@@ -235,6 +239,104 @@ const recordWatch = (video) => {
   if (state.historyMode) {
     renderVideos({ reset: true });
   }
+};
+
+const buildBackupData = () => ({
+  version: 1,
+  createdAt: Date.now(),
+  folders: state.folders.map((folder) => ({
+    name: folder.name,
+  })),
+  videos: state.videos.map((video) => ({
+    title: video.title,
+    folderName: video.folderName,
+    channelName: video.channelName,
+    relativePath: video.relativePath,
+    createdAt: video.createdAt,
+    duration: video.duration,
+    durationLabel: video.durationLabel,
+    thumbnail: video.thumbnail,
+    likes: video.likes,
+    dislikes: video.dislikes,
+    comments: video.comments,
+    progress: video.progress,
+    watched: video.watched,
+    fileKey: video.fileKey,
+  })),
+  watchedHistory: state.watchedHistory,
+});
+
+const exportBackup = () => {
+  const data = buildBackupData();
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `mytube-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+};
+
+const mergeBackup = async (data) => {
+  const folders = Array.isArray(data.folders) ? data.folders : [];
+  const videos = Array.isArray(data.videos) ? data.videos : [];
+  const watchedHistory = Array.isArray(data.watchedHistory) ? data.watchedHistory : [];
+  if (watchedHistory.length) {
+    state.watchedHistory = watchedHistory.slice(0, 200);
+    saveWatchedHistory();
+  }
+  if (folders.length) {
+    const folderNames = new Set(folders.map((folder) => folder.name).filter(Boolean));
+    await ensureFolders(folderNames);
+  }
+  if (!videos.length) {
+    renderVideos({ reset: true });
+    return;
+  }
+  const existingKeys = new Set(state.videos.map((video) => video.fileKey).filter(Boolean));
+  const existingTitlesByFolder = new Map();
+  state.videos.forEach((video) => {
+    const folder = video.folderName || "";
+    const titleSet = existingTitlesByFolder.get(folder) || new Set();
+    titleSet.add(video.title);
+    existingTitlesByFolder.set(folder, titleSet);
+  });
+  for (const video of videos) {
+    if (!video || !video.title) continue;
+    if (video.fileKey && existingKeys.has(video.fileKey)) continue;
+    const folderKey = video.folderName || "";
+    const titleSet = existingTitlesByFolder.get(folderKey) || new Set();
+    if (titleSet.has(video.title)) continue;
+    const record = {
+      id: `backup-${crypto.randomUUID()}`,
+      title: video.title,
+      folderName: folderKey,
+      channelName: video.channelName || folderKey,
+      relativePath: video.relativePath,
+      createdAt: video.createdAt || Date.now(),
+      duration: video.duration,
+      durationLabel: video.durationLabel,
+      thumbnail: video.thumbnail,
+      likes: video.likes || 0,
+      dislikes: video.dislikes || 0,
+      comments: Array.isArray(video.comments) ? video.comments : [],
+      progress: video.progress || 0,
+      watched: Boolean(video.watched),
+      fileKey: video.fileKey,
+      handle: null,
+      file: null,
+    };
+    state.videos.push(record);
+    if (record.fileKey) {
+      existingKeys.add(record.fileKey);
+    }
+    titleSet.add(record.title);
+    existingTitlesByFolder.set(folderKey, titleSet);
+    await putItem(VIDEO_STORE, record);
+  }
+  renderVideos({ reset: true });
 };
 
 const loadState = async () => {
@@ -538,19 +640,23 @@ const renderComments = (video) => {
 
 
 const switchView = (view) => {
+  watchView.classList.remove("active");
+  shortsView.classList.remove("active");
+  libraryView.classList.remove("active");
+  if (profileView) {
+    profileView.classList.remove("active");
+  }
   if (view === "watch") {
-    libraryView.classList.remove("active");
     watchView.classList.add("active");
-    shortsView.classList.remove("active");
     stopShortsPlayback();
   } else if (view === "shorts") {
-    libraryView.classList.remove("active");
-    watchView.classList.remove("active");
     shortsView.classList.add("active");
     stopMainPlayback();
+  } else if (view === "profile" && profileView) {
+    profileView.classList.add("active");
+    stopMainPlayback();
+    stopShortsPlayback();
   } else {
-    watchView.classList.remove("active");
-    shortsView.classList.remove("active");
     libraryView.classList.add("active");
     stopMainPlayback();
     stopShortsPlayback();
@@ -572,6 +678,7 @@ const openVideo = async (videoId) => {
   const url = URL.createObjectURL(file);
   videoPlayer.src = url;
   videoPlayer.currentTime = video.progress || 0;
+  videoPlayer.play();
   if (!video.watched) {
     video.watched = true;
     await updateActiveVideo({ watched: true });
@@ -1013,6 +1120,11 @@ if (logoLink) {
     setShuffleFeed();
   });
 }
+if (profileBtn) {
+  profileBtn.addEventListener("click", () => {
+    switchView("profile");
+  });
+}
 shortsTab.addEventListener("click", () => {
   switchView("shorts");
   buildShortsQueue();
@@ -1021,6 +1133,27 @@ shortsTab.addEventListener("click", () => {
 if (historyTab) {
   historyTab.addEventListener("click", () => {
     setHistoryFeed();
+  });
+}
+
+if (exportBackupBtn) {
+  exportBackupBtn.addEventListener("click", exportBackup);
+}
+
+if (importBackupInput) {
+  importBackupInput.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      await mergeBackup(data);
+      alert("Бекап импортирован. Для воспроизведения файлов потребуется повторный импорт видео.");
+    } catch (error) {
+      console.error(error);
+      alert("Не удалось импортировать бекап.");
+    }
   });
 }
 
