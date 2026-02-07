@@ -9,7 +9,7 @@
   <body>
     <div class="app">
       <header class="topbar">
-        <a class="logo" href="index.html">MyTube</a>
+        <a class="logo" id="logoLink" href="index.html">MyTube</a>
         <div class="search">
           <input id="searchInput" type="search" placeholder="Поиск" />
         </div>
@@ -106,6 +106,7 @@
     <template id="videoCardTemplate">
       <article class="video-card">
         <div class="thumbnail">
+          <span class="watched-indicator" aria-label="Просмотрено">⏰</span>
           <span class="duration"></span>
         </div>
         <div class="video-info">

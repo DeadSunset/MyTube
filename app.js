@@ -6,6 +6,7 @@ const folderList = document.getElementById("folderList");
 const videoGrid = document.getElementById("videoGrid");
 const videoCount = document.getElementById("videoCount");
 const searchInput = document.getElementById("searchInput");
+const logoLink = document.getElementById("logoLink");
 const libraryView = document.getElementById("libraryView");
 const watchView = document.getElementById("watchView");
 const shortsView = document.getElementById("shortsView");
@@ -50,6 +51,9 @@ let state = {
   folders: [],
   activeVideoId: null,
   searchTerm: "",
+  activeFolder: null,
+  shuffleMode: false,
+  shuffledIds: [],
   visibleCount: PAGE_SIZE,
   renderedCount: 0,
   isEditing: false,
@@ -193,6 +197,7 @@ const loadState = async () => {
     watched: Boolean(video.watched),
   }));
   state.folders = folders || [];
+  state.shuffledIds = [];
   renderFolders();
   renderVideos({ reset: true });
 };
@@ -210,17 +215,79 @@ const renderFolders = () => {
       event.stopPropagation();
       await removeFolder(folder.id);
     });
+    li.addEventListener("click", () => {
+      state.activeFolder = folder.name;
+      state.shuffleMode = false;
+      state.shuffledIds = [];
+      switchView("library");
+      renderFolders();
+      renderVideos({ reset: true });
+    });
+    if (state.activeFolder === folder.name) {
+      li.classList.add("active");
+    }
     li.append(label, deleteButton);
     folderList.appendChild(li);
   });
 };
 
-const getFilteredVideos = () =>
-  state.searchTerm
-    ? state.videos.filter((video) =>
-        video.title.toLowerCase().includes(state.searchTerm.toLowerCase())
-      )
-    : state.videos;
+const getFilteredVideos = () => {
+  let base = state.videos;
+  if (state.shuffleMode) {
+    if (!state.shuffledIds.length) {
+      state.shuffledIds = shuffle(state.videos).map((video) => video.id);
+    }
+    base = state.shuffledIds
+      .map((id) => state.videos.find((video) => video.id === id))
+      .filter(Boolean);
+  }
+  if (state.activeFolder) {
+    base = base.filter((video) => video.folderName === state.activeFolder);
+  }
+  if (state.searchTerm) {
+    const term = state.searchTerm.toLowerCase();
+    base = base.filter((video) => video.title.toLowerCase().includes(term));
+  }
+  return base;
+};
+
+const setShuffleFeed = () => {
+  state.activeFolder = null;
+  state.searchTerm = "";
+  if (searchInput) {
+    searchInput.value = "";
+  }
+  state.shuffleMode = true;
+  state.shuffledIds = shuffle(state.videos).map((video) => video.id);
+  switchView("library");
+  renderFolders();
+  renderVideos({ reset: true });
+};
+
+const buildVideoCard = (video) => {
+  const card = videoCardTemplate.content.cloneNode(true);
+  card.querySelector(".title").textContent = video.title;
+  card.querySelector(".duration").textContent = video.durationLabel || "--:--";
+  card.querySelector(".meta").textContent = video.channelName || video.folderName || "Без папки";
+  const element = card.querySelector(".video-card");
+  const thumbnail = card.querySelector(".thumbnail");
+  if (video.thumbnail) {
+    thumbnail.style.backgroundImage = `url(${video.thumbnail})`;
+  } else {
+    thumbnail.style.backgroundImage = "";
+  }
+  if (video.watched) {
+    element.classList.add("is-watched");
+  }
+  element.dataset.videoId = video.id;
+  const deleteBtn = card.querySelector(".delete-btn");
+  deleteBtn.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    await removeVideo(video.id);
+  });
+  element.addEventListener("click", () => openVideo(video.id));
+  return card;
+};
 
 const renderVideos = ({ reset = false } = {}) => {
   const filtered = getFilteredVideos();
@@ -234,26 +301,34 @@ const renderVideos = ({ reset = false } = {}) => {
   videoCount.textContent = `${filtered.length} видео`;
   const slice = filtered.slice(state.renderedCount, targetCount);
   slice.forEach((video) => {
-    const card = videoCardTemplate.content.cloneNode(true);
-    card.querySelector(".title").textContent = video.title;
-    card.querySelector(".duration").textContent = video.durationLabel || "--:--";
-    card.querySelector(".meta").textContent = video.channelName || video.folderName || "Без папки";
-    const element = card.querySelector(".video-card");
-    const thumbnail = card.querySelector(".thumbnail");
-    if (video.thumbnail) {
-      thumbnail.style.backgroundImage = `url(${video.thumbnail})`;
-    } else {
-      thumbnail.style.backgroundImage = "";
-    }
-    const deleteBtn = card.querySelector(".delete-btn");
-    deleteBtn.addEventListener("click", async (event) => {
-      event.stopPropagation();
-      await removeVideo(video.id);
-    });
-    element.addEventListener("click", () => openVideo(video.id));
-    videoGrid.appendChild(card);
+    videoGrid.appendChild(buildVideoCard(video));
   });
   state.renderedCount = targetCount;
+};
+
+const updateWatchedIndicator = (videoId, watched) => {
+  const card = videoGrid.querySelector(`[data-video-id="${videoId}"]`);
+  if (!card) return;
+  card.classList.toggle("is-watched", Boolean(watched));
+};
+
+const shouldIncludeVideo = (video) => {
+  if (state.activeFolder && video.folderName !== state.activeFolder) return false;
+  if (state.searchTerm) {
+    return video.title.toLowerCase().includes(state.searchTerm.toLowerCase());
+  }
+  return true;
+};
+
+const appendVideoToGrid = (video) => {
+  if (!shouldIncludeVideo(video)) return;
+  if (state.shuffleMode) {
+    state.shuffledIds.push(video.id);
+  }
+  state.visibleCount = Math.min(state.visibleCount + 1, getFilteredVideos().length);
+  videoGrid.appendChild(buildVideoCard(video));
+  state.renderedCount = videoGrid.children.length;
+  videoCount.textContent = `${getFilteredVideos().length} видео`;
 };
 
 const renderRecommendations = (currentVideo) => {
@@ -335,6 +410,7 @@ const openVideo = async (videoId) => {
   if (!video.watched) {
     video.watched = true;
     await updateActiveVideo({ watched: true });
+    updateWatchedIndicator(video.id, true);
   }
   progressLabel.textContent =
     video.progress && video.duration
@@ -395,23 +471,26 @@ const refreshVideoMetadata = async (video) => {
 const walkFolder = async (directoryHandle, rootName, path = "", files = []) => {
   try {
     for await (const entry of directoryHandle.values()) {
-      if (entry.kind === "file") {
-        if (entry.name.match(/\.(mp4|webm|mkv|mov)$/i)) {
-          const relativePath = path ? `${path}/${entry.name}` : entry.name;
-          files.push({
-            handle: entry,
-            parentPath: path ? `${rootName}/${path}` : rootName,
-            relativePath,
-          });
+      try {
+        if (entry.kind === "file") {
+          if (entry.name.match(/\.(mp4|webm|mkv|mov)$/i)) {
+            const relativePath = path ? `${path}/${entry.name}` : entry.name;
+            files.push({
+              handle: entry,
+              parentPath: path ? `${rootName}/${path}` : rootName,
+              relativePath,
+            });
+          }
+        } else if (entry.kind === "directory") {
+          const permitted = await verifyPermission(entry);
+          if (!permitted) {
+            console.warn(`Нет доступа к подпапке ${entry.name}`);
+          }
+          const nextPath = path ? `${path}/${entry.name}` : entry.name;
+          await walkFolder(entry, rootName, nextPath, files);
         }
-      } else if (entry.kind === "directory") {
-        const permitted = await verifyPermission(entry);
-        if (!permitted) {
-          console.warn(`Нет доступа к подпапке ${entry.name}`);
-          continue;
-        }
-        const nextPath = path ? `${path}/${entry.name}` : entry.name;
-        await walkFolder(entry, rootName, nextPath, files);
+      } catch (error) {
+        console.warn("Не удалось обработать элемент", entry?.name, error);
       }
     }
   } catch (error) {
@@ -489,8 +568,10 @@ const addFolder = async () => {
       };
       state.videos.push(video);
       await putItem(VIDEO_STORE, video);
+      appendVideoToGrid(video);
       processed += 1;
       updateImportStatus();
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
 
     renderVideos({ reset: true });
@@ -591,6 +672,9 @@ const removeFolder = async (folderId) => {
     await deleteItem(VIDEO_STORE, video.id);
   }
   state.videos = state.videos.filter((video) => video.folderName !== folder.name);
+  if (state.activeFolder === folder.name) {
+    state.activeFolder = null;
+  }
   renderFolders();
   renderVideos({ reset: true });
 };
@@ -618,6 +702,12 @@ const handleScroll = () => {
 addFolderBtn.addEventListener("click", addFolder);
 editLibraryBtn.addEventListener("click", toggleEditing);
 libraryToggle.addEventListener("click", toggleLibraryList);
+if (logoLink) {
+  logoLink.addEventListener("click", (event) => {
+    event.preventDefault();
+    setShuffleFeed();
+  });
+}
 shortsTab.addEventListener("click", () => {
   switchView("shorts");
   buildShortsQueue();
