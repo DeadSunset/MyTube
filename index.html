@@ -19,7 +19,12 @@
 
       <main class="main">
         <aside class="sidebar">
-          <h3>Библиотека</h3>
+          <div class="sidebar-header">
+            <button id="shortsTab" class="shorts-button">Шортсы</button>
+            <button id="libraryToggle" class="sidebar-toggle">
+              Библиотека <span class="chevron">▾</span>
+            </button>
+          </div>
           <ul id="folderList" class="folder-list"></ul>
         </aside>
 
@@ -61,6 +66,23 @@
                 <h3>Похожие видео</h3>
                 <div id="recommendations" class="recommendations"></div>
               </aside>
+            </div>
+          </div>
+
+          <div id="shortsView" class="view">
+            <div class="shorts-layout">
+              <div class="shorts-player">
+                <video id="shortsPlayer" playsinline></video>
+                <div class="shorts-controls">
+                  <button id="shortsPrevBtn" class="btn">▲</button>
+                  <button id="shortsNextBtn" class="btn">▼</button>
+                </div>
+              </div>
+              <div class="shorts-meta">
+                <h2 id="shortsTitle"></h2>
+                <p id="shortsChannel" class="muted"></p>
+                <p id="shortsStatus" class="muted"></p>
+              </div>
             </div>
           </div>
         </section>

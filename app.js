@@ -1,11 +1,14 @@
 const addFolderBtn = document.getElementById("addFolderBtn");
 const editLibraryBtn = document.getElementById("editLibraryBtn");
+const libraryToggle = document.getElementById("libraryToggle");
+const shortsTab = document.getElementById("shortsTab");
 const folderList = document.getElementById("folderList");
 const videoGrid = document.getElementById("videoGrid");
 const videoCount = document.getElementById("videoCount");
 const searchInput = document.getElementById("searchInput");
 const libraryView = document.getElementById("libraryView");
 const watchView = document.getElementById("watchView");
+const shortsView = document.getElementById("shortsView");
 const videoPlayer = document.getElementById("videoPlayer");
 const watchTitle = document.getElementById("watchTitle");
 const likeBtn = document.getElementById("likeBtn");
@@ -19,6 +22,12 @@ const saveCommentBtn = document.getElementById("saveCommentBtn");
 const recommendations = document.getElementById("recommendations");
 const videoCardTemplate = document.getElementById("videoCardTemplate");
 const recommendationTemplate = document.getElementById("recommendationTemplate");
+const shortsPlayer = document.getElementById("shortsPlayer");
+const shortsPrevBtn = document.getElementById("shortsPrevBtn");
+const shortsNextBtn = document.getElementById("shortsNextBtn");
+const shortsTitle = document.getElementById("shortsTitle");
+const shortsChannel = document.getElementById("shortsChannel");
+const shortsStatus = document.getElementById("shortsStatus");
 
 const DB_NAME = "mytube-db";
 const DB_VERSION = 1;
@@ -35,6 +44,9 @@ let state = {
   visibleCount: PAGE_SIZE,
   renderedCount: 0,
   isEditing: false,
+  shortsQueue: [],
+  shortsIndex: 0,
+  sessionSeenShorts: new Set(),
 };
 
 const openDb = () =>
@@ -62,6 +74,16 @@ const withStore = async (storeName, mode, callback) => {
     transaction.oncomplete = () => resolve(result);
     transaction.onerror = () => reject(transaction.error);
   });
+};
+
+const verifyPermission = async (handle) => {
+  if (!handle) return false;
+  if (!handle.queryPermission || !handle.requestPermission) return true;
+  const options = { mode: "read" };
+  const query = await handle.queryPermission(options);
+  if (query === "granted") return true;
+  const request = await handle.requestPermission(options);
+  return request === "granted";
 };
 
 const getAll = (storeName) =>
@@ -155,6 +177,7 @@ const loadState = async () => {
           },
         ]
       : [],
+    watched: Boolean(video.watched),
   }));
   state.folders = folders || [];
   renderFolders();
@@ -201,7 +224,7 @@ const renderVideos = ({ reset = false } = {}) => {
     const card = videoCardTemplate.content.cloneNode(true);
     card.querySelector(".title").textContent = video.title;
     card.querySelector(".duration").textContent = video.durationLabel || "--:--";
-    card.querySelector(".meta").textContent = video.folderName || "Без папки";
+    card.querySelector(".meta").textContent = video.channelName || video.folderName || "Без папки";
     const element = card.querySelector(".video-card");
     const thumbnail = card.querySelector(".thumbnail");
     if (video.thumbnail) {
@@ -236,7 +259,7 @@ const renderRecommendations = (currentVideo) => {
     const card = recommendationTemplate.content.cloneNode(true);
     card.querySelector(".title").textContent = video.title;
     card.querySelector(".meta").textContent = `${video.durationLabel || "--:--"} • ${
-      video.folderName || "Без папки"
+      video.channelName || video.folderName || "Без папки"
     }`;
     const element = card.querySelector(".recommendation");
     element.addEventListener("click", () => openVideo(video.id));
@@ -269,8 +292,14 @@ const switchView = (view) => {
   if (view === "watch") {
     libraryView.classList.remove("active");
     watchView.classList.add("active");
+    shortsView.classList.remove("active");
+  } else if (view === "shorts") {
+    libraryView.classList.remove("active");
+    watchView.classList.remove("active");
+    shortsView.classList.add("active");
   } else {
     watchView.classList.remove("active");
+    shortsView.classList.remove("active");
     libraryView.classList.add("active");
   }
 };
@@ -290,6 +319,10 @@ const openVideo = async (videoId) => {
   const url = URL.createObjectURL(file);
   videoPlayer.src = url;
   videoPlayer.currentTime = video.progress || 0;
+  if (!video.watched) {
+    video.watched = true;
+    await updateActiveVideo({ watched: true });
+  }
   progressLabel.textContent =
     video.progress && video.duration
       ? `Последняя остановка: ${humanizeDuration(video.progress)} / ${video.durationLabel}`
@@ -338,12 +371,32 @@ const refreshVideoMetadata = async (video) => {
   };
 };
 
+const walkFolder = async (directoryHandle, files = []) => {
+  const permitted = await verifyPermission(directoryHandle);
+  if (!permitted) return files;
+  for await (const entry of directoryHandle.values()) {
+    if (entry.kind === "file") {
+      if (entry.name.match(/\.(mp4|webm|mkv|mov)$/i)) {
+        files.push({ handle: entry, parent: directoryHandle.name });
+      }
+    } else if (entry.kind === "directory") {
+      await walkFolder(entry, files);
+    }
+  }
+  return files;
+};
+
 const addFolder = async () => {
   if (!window.showDirectoryPicker) {
     alert("Ваш браузер не поддерживает выбор папок. Откройте в Chrome/Edge.");
     return;
   }
   const handle = await window.showDirectoryPicker();
+  const permitted = await verifyPermission(handle);
+  if (!permitted) {
+    alert("Нужен доступ к папке, чтобы импортировать видео.");
+    return;
+  }
   const folder = {
     id: `${handle.name}-${crypto.randomUUID()}`,
     name: handle.name,
@@ -354,26 +407,28 @@ const addFolder = async () => {
   await putItem(FOLDER_STORE, folder);
   renderFolders();
 
-  const entries = [];
-  for await (const entry of handle.values()) {
-    if (entry.kind === "file" && entry.name.match(/\.(mp4|webm|mkv|mov)$/i)) {
-      entries.push(entry);
-    }
-  }
+  const entries = await walkFolder(handle);
 
-  for (const fileHandle of entries) {
+  for (const entry of entries) {
+    const fileHandle = entry.handle;
+    const filePermitted = await verifyPermission(fileHandle);
+    if (!filePermitted) {
+      continue;
+    }
     const id = idFromHandle(fileHandle, crypto.randomUUID());
     const metadata = await refreshVideoMetadata({ handle: fileHandle });
     const video = {
       id,
       title: fileHandle.name.replace(/\.[^.]+$/, ""),
       folderName: handle.name,
+      channelName: entry.parent || handle.name,
       handle: fileHandle,
       ...metadata,
       likes: 0,
       dislikes: 0,
       comments: [],
       progress: 0,
+      watched: false,
     };
     state.videos.push(video);
     await putItem(VIDEO_STORE, video);
@@ -387,6 +442,57 @@ const updateActiveVideo = async (updates) => {
   if (!video) return;
   Object.assign(video, updates);
   await putItem(VIDEO_STORE, video);
+};
+
+const shuffle = (list) => {
+  const array = [...list];
+  for (let i = array.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+  return array;
+};
+
+const buildShortsQueue = () => {
+  const shorts = state.videos.filter((video) => video.duration && video.duration <= 60);
+  const unseen = shorts.filter((video) => !video.watched);
+  const candidates = unseen.length ? unseen : shorts;
+  const filtered = candidates.filter((video) => !state.sessionSeenShorts.has(video.id));
+  const selection = filtered.length ? filtered : candidates;
+  state.shortsQueue = shuffle(selection);
+  state.shortsIndex = 0;
+};
+
+const openShorts = async (direction = 0) => {
+  if (!state.shortsQueue.length) {
+    buildShortsQueue();
+  }
+  if (!state.shortsQueue.length) {
+    shortsTitle.textContent = "Нет коротких видео";
+    shortsChannel.textContent = "";
+    shortsStatus.textContent = "";
+    shortsPlayer.removeAttribute("src");
+    return;
+  }
+  if (direction !== 0) {
+    const nextIndex = state.shortsIndex + direction;
+    if (nextIndex >= 0 && nextIndex < state.shortsQueue.length) {
+      state.shortsIndex = nextIndex;
+    }
+  }
+  const video = state.shortsQueue[state.shortsIndex];
+  state.sessionSeenShorts.add(video.id);
+  const file = await video.handle.getFile();
+  const url = URL.createObjectURL(file);
+  shortsPlayer.src = url;
+  shortsPlayer.play();
+  shortsTitle.textContent = video.title;
+  shortsChannel.textContent = video.channelName || video.folderName || "Без канала";
+  shortsStatus.textContent = `Видео ${state.shortsIndex + 1} из ${state.shortsQueue.length}`;
+  if (!video.watched) {
+    video.watched = true;
+    await putItem(VIDEO_STORE, video);
+  }
 };
 
 const removeVideo = async (videoId) => {
@@ -418,6 +524,10 @@ const toggleEditing = () => {
   editLibraryBtn.textContent = state.isEditing ? "Готово" : "Редактировать";
 };
 
+const toggleLibraryList = () => {
+  folderList.classList.toggle("collapsed");
+};
+
 const handleScroll = () => {
   if (!libraryView.classList.contains("active")) return;
   const filtered = getFilteredVideos();
@@ -430,6 +540,12 @@ const handleScroll = () => {
 
 addFolderBtn.addEventListener("click", addFolder);
 editLibraryBtn.addEventListener("click", toggleEditing);
+libraryToggle.addEventListener("click", toggleLibraryList);
+shortsTab.addEventListener("click", () => {
+  switchView("shorts");
+  buildShortsQueue();
+  openShorts(0);
+});
 
 searchInput.addEventListener("input", (event) => {
   state.searchTerm = event.target.value;
@@ -504,5 +620,31 @@ commentList.addEventListener("click", (event) => {
 });
 
 window.addEventListener("scroll", handleScroll);
+
+shortsNextBtn.addEventListener("click", () => openShorts(1));
+shortsPrevBtn.addEventListener("click", () => openShorts(-1));
+
+shortsPlayer.addEventListener("ended", () => openShorts(1));
+
+window.addEventListener("keydown", (event) => {
+  if (!shortsView.classList.contains("active")) return;
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    openShorts(1);
+  }
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    openShorts(-1);
+  }
+});
+
+window.addEventListener("wheel", (event) => {
+  if (!shortsView.classList.contains("active")) return;
+  if (event.deltaY > 0) {
+    openShorts(1);
+  } else if (event.deltaY < 0) {
+    openShorts(-1);
+  }
+});
 
 loadState();
