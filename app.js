@@ -34,6 +34,9 @@ const shortsLikeCount = document.getElementById("shortsLikeCount");
 const shortsDislikeCount = document.getElementById("shortsDislikeCount");
 const shortsCommentInput = document.getElementById("shortsCommentInput");
 const shortsCommentBtn = document.getElementById("shortsCommentBtn");
+const importStatus = document.getElementById("importStatus");
+const importLabel = document.getElementById("importLabel");
+const importBarFill = document.getElementById("importBarFill");
 
 const DB_NAME = "mytube-db";
 const DB_VERSION = 1;
@@ -448,6 +451,24 @@ const addFolder = async () => {
       alert("Видео не найдены. Проверьте, что папка содержит файлы mp4/webm/mkv/mov.");
     }
 
+    const total = entries.length;
+    let processed = 0;
+    const updateImportStatus = () => {
+      if (!importStatus || !importLabel || !importBarFill) return;
+      importStatus.classList.remove("hidden");
+      importLabel.textContent = `Импорт: ${processed} / ${total}`;
+      const percent = total ? Math.round((processed / total) * 100) : 0;
+      importBarFill.style.width = `${percent}%`;
+    };
+    const resetImportStatus = () => {
+      if (!importStatus || !importLabel || !importBarFill) return;
+      importStatus.classList.add("hidden");
+      importLabel.textContent = "Импорт: 0 / 0";
+      importBarFill.style.width = "0%";
+    };
+
+    updateImportStatus();
+
     for (const entry of entries) {
       const fileHandle = entry.handle;
       const id = idFromHandle(fileHandle, crypto.randomUUID(), entry.relativePath);
@@ -468,12 +489,24 @@ const addFolder = async () => {
       };
       state.videos.push(video);
       await putItem(VIDEO_STORE, video);
+      processed += 1;
+      updateImportStatus();
     }
 
     renderVideos({ reset: true });
+    setTimeout(resetImportStatus, 800);
   } catch (error) {
     console.error(error);
     alert("Не удалось импортировать видео. Проверьте доступ к папке.");
+    if (importStatus) {
+      importStatus.classList.remove("hidden");
+    }
+    if (importLabel) {
+      importLabel.textContent = "Импорт прерван";
+    }
+    if (importBarFill) {
+      importBarFill.style.width = "0%";
+    }
   }
 };
 
