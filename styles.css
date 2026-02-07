@@ -294,6 +294,20 @@ body {
   opacity: 1;
 }
 
+.watched-indicator {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 14px;
+  color: #ff4b4b;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.video-card.is-watched .watched-indicator {
+  opacity: 1;
+}
+
 .video-card:hover {
   border-color: var(--accent);
 }
