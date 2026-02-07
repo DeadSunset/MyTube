@@ -76,6 +76,16 @@ const withStore = async (storeName, mode, callback) => {
   });
 };
 
+const verifyPermission = async (handle) => {
+  if (!handle) return false;
+  if (!handle.queryPermission || !handle.requestPermission) return true;
+  const options = { mode: "read" };
+  const query = await handle.queryPermission(options);
+  if (query === "granted") return true;
+  const request = await handle.requestPermission(options);
+  return request === "granted";
+};
+
 const getAll = (storeName) =>
   withStore(storeName, "readonly", (store) =>
     new Promise((resolve, reject) => {
@@ -362,6 +372,8 @@ const refreshVideoMetadata = async (video) => {
 };
 
 const walkFolder = async (directoryHandle, files = []) => {
+  const permitted = await verifyPermission(directoryHandle);
+  if (!permitted) return files;
   for await (const entry of directoryHandle.values()) {
     if (entry.kind === "file") {
       if (entry.name.match(/\.(mp4|webm|mkv|mov)$/i)) {
@@ -380,6 +392,11 @@ const addFolder = async () => {
     return;
   }
   const handle = await window.showDirectoryPicker();
+  const permitted = await verifyPermission(handle);
+  if (!permitted) {
+    alert("Нужен доступ к папке, чтобы импортировать видео.");
+    return;
+  }
   const folder = {
     id: `${handle.name}-${crypto.randomUUID()}`,
     name: handle.name,
@@ -394,6 +411,10 @@ const addFolder = async () => {
 
   for (const entry of entries) {
     const fileHandle = entry.handle;
+    const filePermitted = await verifyPermission(fileHandle);
+    if (!filePermitted) {
+      continue;
+    }
     const id = idFromHandle(fileHandle, crypto.randomUUID());
     const metadata = await refreshVideoMetadata({ handle: fileHandle });
     const video = {

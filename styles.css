@@ -91,8 +91,7 @@ body {
   margin-bottom: 12px;
 }
 
-.sidebar-toggle,
-.sidebar-tab {
+.sidebar-toggle {
   background: none;
   border: none;
   color: var(--text);
@@ -103,6 +102,21 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.shorts-button {
+  background: #ff2d2d;
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+}
+
+.shorts-button:hover {
+  filter: brightness(1.05);
 }
 
 .sidebar-toggle .chevron {
