@@ -85,7 +85,7 @@
                 </div>
                 <section class="import-tools">
                   <h3>Импорт метаданных и превью</h3>
-                  <p class="muted">Работает локально в Live Server. Для полного импорта комментариев/лайков/просмотров по URL можно подключить локальный парсер API.</p>
+                  <p class="muted">Работает по кнопке без дополнительной настройки: сначала пробуем прямой импорт через YouTube API, затем локальный парсер (если запущен). Загружаются просмотры, лайки, до 50 комментариев и до 10 ответов к каждому (если доступны).</p>
                   <div class="import-actions">
                     <button id="importHtmlBtn" class="btn">Импортировать HTML</button>
                     <input id="importHtmlInput" type="file" accept=".html,text/html" hidden />
@@ -164,11 +164,12 @@
               </div>
               <div class="profile-actions profile-import-actions">
                 <button id="exportPendingListBtn" class="btn">Экспортировать список видео без превью/комментов</button>
+                <button id="autoParseLibraryBtn" class="btn">Автопарсить всю библиотеку</button>
                 <label class="btn" for="importVideoDataInput">Импортировать данные</label>
                 <input id="importVideoDataInput" type="file" accept="application/json" hidden />
               </div>
               <div class="profile-api-config">
-                <label for="localParserApiInput" class="muted">Локальный URL парсера (для полного импорта по ссылке)</label>
+                <label for="localParserApiInput" class="muted">Локальный URL парсера (необязательно, запасной вариант)</label>
                 <input id="localParserApiInput" type="url" placeholder="http://127.0.0.1:8787/youtube" />
               </div>
             </div>
