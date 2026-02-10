@@ -73,6 +73,7 @@ const FOLDER_STORE = "folders";
 const PAGE_SIZE = 40;
 const TIME_PATTERN = /\b(\d{1,2}:\d{2}(?::\d{2})?)\b/g;
 const PARSER_API_STORAGE_KEY = "mytube-parser-api-url";
+const DEFAULT_PARSER_API_URL = "http://127.0.0.1:8787/youtube";
 
 let state = {
   videos: [],
@@ -315,7 +316,7 @@ const parseCompactNumber = (value) => {
 const getParserApiUrl = () => {
   const fromInput = localParserApiInput?.value?.trim();
   if (fromInput) return fromInput;
-  return localStorage.getItem(PARSER_API_STORAGE_KEY) || "";
+  return localStorage.getItem(PARSER_API_STORAGE_KEY) || DEFAULT_PARSER_API_URL;
 };
 
 const saveParserApiUrl = (value) => {
