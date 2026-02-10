@@ -246,6 +246,34 @@ body {
   flex-wrap: wrap;
 }
 
+
+.profile-import-actions {
+  margin-top: 12px;
+}
+
+.profile-api-config {
+  margin-top: 16px;
+  display: grid;
+  gap: 8px;
+}
+
+#localParserApiInput {
+  width: 100%;
+  background: #121212;
+  border: 1px solid #303030;
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 4px;
+}
+
+.comment-replies.is-collapsed {
+  display: none;
+}
+
+.comment-thread-more {
+  margin-top: 8px;
+}
+
 .section-header {
   display: flex;
   align-items: center;

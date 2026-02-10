@@ -50,6 +50,9 @@ const importBarFill = document.getElementById("importBarFill");
 const profileBtn = document.getElementById("profileBtn");
 const exportBackupBtn = document.getElementById("exportBackupBtn");
 const importBackupInput = document.getElementById("importBackupInput");
+const exportPendingListBtn = document.getElementById("exportPendingListBtn");
+const importVideoDataInput = document.getElementById("importVideoDataInput");
+const localParserApiInput = document.getElementById("localParserApiInput");
 const importHtmlBtn = document.getElementById("importHtmlBtn");
 const importHtmlInput = document.getElementById("importHtmlInput");
 const importUrlInput = document.getElementById("importUrlInput");
@@ -69,6 +72,7 @@ const VIDEO_STORE = "videos";
 const FOLDER_STORE = "folders";
 const PAGE_SIZE = 40;
 const TIME_PATTERN = /\b(\d{1,2}:\d{2}(?::\d{2})?)\b/g;
+const PARSER_API_STORAGE_KEY = "mytube-parser-api-url";
 
 let state = {
   videos: [],
@@ -259,22 +263,29 @@ const renderImportedStats = (video) => {
   }
 };
 
-const normalizeComment = (comment, author = "Вы") => ({
-  id: comment.id || crypto.randomUUID(),
-  author: comment.author || author,
-  text: comment.text || "",
-  createdAt: comment.createdAt || Date.now(),
-  likes: Number.isFinite(comment.likes) ? comment.likes : 0,
-  dislikes: Number.isFinite(comment.dislikes) ? comment.dislikes : 0,
-  replies: Array.isArray(comment.replies)
+const normalizeComment = (comment, author = "Вы") => {
+  const replies = Array.isArray(comment.replies)
     ? comment.replies.map((reply) => ({
         id: reply.id || crypto.randomUUID(),
         author: reply.author || "Вы",
         text: reply.text || "",
         createdAt: reply.createdAt || Date.now(),
       }))
-    : [],
-});
+    : [];
+  const replyCount = Number.isFinite(comment.replyCount) ? comment.replyCount : replies.length;
+  return {
+    id: comment.id || crypto.randomUUID(),
+    author: comment.author || author,
+    text: comment.text || "",
+    createdAt: comment.createdAt || Date.now(),
+    likes: Number.isFinite(comment.likes) ? comment.likes : 0,
+    dislikes: Number.isFinite(comment.dislikes) ? comment.dislikes : 0,
+    replies,
+    replyCount,
+    order: Number.isFinite(comment.order) ? comment.order : 0,
+    repliesExpanded: Boolean(comment.repliesExpanded),
+  };
+};
 
 const extractYouTubeVideoId = (urlOrId) => {
   if (!urlOrId) return "";
@@ -299,6 +310,103 @@ const parseCompactNumber = (value) => {
   if (normalized.includes("млн")) return Math.round(number * 1_000_000);
   if (normalized.includes("млрд")) return Math.round(number * 1_000_000_000);
   return Math.round(number);
+};
+
+const getParserApiUrl = () => {
+  const fromInput = localParserApiInput?.value?.trim();
+  if (fromInput) return fromInput;
+  return localStorage.getItem(PARSER_API_STORAGE_KEY) || "";
+};
+
+const saveParserApiUrl = (value) => {
+  if (!value) {
+    localStorage.removeItem(PARSER_API_STORAGE_KEY);
+    return;
+  }
+  localStorage.setItem(PARSER_API_STORAGE_KEY, value);
+};
+
+const isVideoMissingMeta = (video) => {
+  const hasThumbnail = Boolean(video.thumbnail);
+  const hasComments = Array.isArray(video.comments) && video.comments.length > 0;
+  const imported = video.imported;
+  const hasImportedStats = Boolean(
+    imported?.stats &&
+    (imported.stats.views !== null || imported.stats.likes !== null || imported.stats.dislikes !== null)
+  );
+  return !hasThumbnail && !hasComments && !hasImportedStats;
+};
+
+const exportPendingVideoList = () => {
+  const pendingVideos = state.videos
+    .filter((video) => isVideoMissingMeta(video))
+    .map((video) => ({
+      id: video.id,
+      title: video.title,
+      folderName: video.folderName || "",
+      channelName: video.channelName || "",
+    }));
+
+  const blob = new Blob([JSON.stringify({ videos: pendingVideos }, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `mytube-pending-videos-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  alert(`Экспортировано ${pendingVideos.length} видео без превью/комментариев.`);
+};
+
+const buildCommentsFromApi = (comments = [], baseIndex = 0) => comments.map((comment, index) => {
+  const replies = Array.isArray(comment.replies)
+    ? comment.replies.map((reply) => ({
+        id: reply.id || crypto.randomUUID(),
+        author: reply.author || "YouTube user",
+        text: reply.text || "",
+        createdAt: reply.createdAt || Date.now(),
+      }))
+    : [];
+  const replyCount = Number.isFinite(comment.replyCount) ? comment.replyCount : replies.length;
+  return normalizeComment({
+    id: comment.id || crypto.randomUUID(),
+    author: comment.author || "YouTube user",
+    text: comment.text || "",
+    createdAt: comment.createdAt || Date.now(),
+    likes: Number.isFinite(comment.likes) ? comment.likes : 0,
+    dislikes: Number.isFinite(comment.dislikes) ? comment.dislikes : 0,
+    replies,
+    replyCount,
+    order: Number.isFinite(comment.order) ? comment.order : baseIndex + index,
+    repliesExpanded: false,
+  }, comment.author || "YouTube user");
+});
+
+const fetchUrlImportPayload = async (inputUrl) => {
+  const parserApiUrl = getParserApiUrl();
+  if (!parserApiUrl) return null;
+  const response = await fetch(`${parserApiUrl}?url=${encodeURIComponent(inputUrl)}`);
+  if (!response.ok) {
+    throw new Error(`Parser API error: ${response.status}`);
+  }
+  const data = await response.json();
+  const payload = {
+    title: data.title || "",
+    channelName: data.channelName || data.author || "",
+    sourceVideoId: data.sourceVideoId || extractYouTubeVideoId(inputUrl),
+    thumbnail: data.thumbnail || data.thumbnailUrl || "",
+    stats: {
+      views: data.stats?.views ?? null,
+      likes: data.stats?.likes ?? null,
+      dislikes: data.stats?.dislikes ?? null,
+      comments: data.stats?.comments ?? (Array.isArray(data.comments) ? data.comments.length : null),
+    },
+    comments: buildCommentsFromApi(Array.isArray(data.comments) ? data.comments : []),
+  };
+  return payload;
 };
 
 const parseInitialJson = (html, marker) => {
@@ -357,7 +465,7 @@ const parseYoutubeHtmlPayload = (htmlText) => {
   const initialData = parseInitialJson(htmlText, "ytInitialData") || {};
   const details = playerData.videoDetails || {};
   const commentsRaw = collectCommentNodes(initialData);
-  const comments = commentsRaw.map((item) => {
+  const comments = commentsRaw.map((item, index) => {
     const textRuns = item.contentText?.runs || [];
     const text = textRuns.map((run) => run.text || "").join("").trim();
     const author = item.authorText?.simpleText || "YouTube user";
@@ -369,6 +477,8 @@ const parseYoutubeHtmlPayload = (htmlText) => {
       likes: likes || 0,
       createdAt: Date.now(),
       replies: [],
+      order: index,
+      replyCount: 0,
     }, author);
   }).filter((item) => item.text);
 
@@ -808,7 +918,9 @@ const renderRecommendations = (currentVideo) => {
 
 const renderComments = (video) => {
   commentList.innerHTML = "";
-  const comments = (video.comments || []).map((comment) => normalizeComment(comment, comment.author));
+  const comments = (video.comments || [])
+    .map((comment, index) => normalizeComment({ ...comment, order: Number.isFinite(comment.order) ? comment.order : index }, comment.author))
+    .sort((a, b) => a.order - b.order);
   video.comments = comments;
   if (!comments.length) {
     const empty = document.createElement("p");
@@ -843,7 +955,7 @@ const renderComments = (video) => {
     `;
 
     const replies = document.createElement("div");
-    replies.className = "comment-replies";
+    replies.className = `comment-replies ${comment.repliesExpanded ? "" : "is-collapsed"}`.trim();
     (comment.replies || []).forEach((reply) => {
       const item = document.createElement("div");
       item.className = "reply-item";
@@ -851,7 +963,19 @@ const renderComments = (video) => {
       replies.appendChild(item);
     });
 
-    wrapper.append(header, textNode, actions, replies);
+    const replyButton = document.createElement("button");
+    replyButton.className = "btn comment-thread-more";
+    replyButton.dataset.action = "toggle-replies";
+    replyButton.dataset.commentId = comment.id;
+    const totalReplies = Number.isFinite(comment.replyCount) ? comment.replyCount : (comment.replies || []).length;
+    replyButton.textContent = comment.repliesExpanded
+      ? "Скрыть ответы"
+      : `Подробнее (${totalReplies})`;
+    if (!totalReplies) {
+      replyButton.disabled = true;
+    }
+
+    wrapper.append(header, textNode, actions, replyButton, replies);
     commentList.appendChild(wrapper);
   });
 };
@@ -1223,7 +1347,10 @@ const applyImportedDataToVideo = async (video, payload, source, sourceUrl = "") 
     video.thumbnail = payload.thumbnail;
   }
   if (Array.isArray(payload.comments) && payload.comments.length) {
-    video.comments = payload.comments.map((comment) => normalizeComment(comment, comment.author || "YouTube user"));
+    video.comments = payload.comments.map((comment, index) => normalizeComment({
+      ...comment,
+      order: Number.isFinite(comment.order) ? comment.order : index,
+    }, comment.author || "YouTube user"));
   }
   await updateActiveVideo({
     title: video.title,
@@ -1250,39 +1377,88 @@ const importMetaFromHtmlFile = async (file) => {
   alert("HTML импорт завершен.");
 };
 
-const importMetaFromUrl = async (inputUrl) => {
-  const video = state.videos.find((item) => item.id === state.activeVideoId);
-  if (!video || !inputUrl) return;
+const importMetaFromUrl = async (inputUrl, options = {}) => {
+  const targetVideoId = options.targetVideoId || state.activeVideoId;
+  const showAlert = options.showAlert !== false;
+  const video = state.videos.find((item) => item.id === targetVideoId);
+  if (!video || !inputUrl) return false;
   const id = extractYouTubeVideoId(inputUrl);
   if (!id) {
-    alert("Не удалось определить video id из URL.");
-    return;
-  }
-  const payload = {
-    sourceVideoId: id,
-    thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
-    stats: {
-      views: null,
-      likes: null,
-      dislikes: null,
-      comments: null,
-    },
-  };
-
-  try {
-    const response = await fetch(`https://noembed.com/embed?url=${encodeURIComponent(inputUrl)}`);
-    if (response.ok) {
-      const data = await response.json();
-      payload.title = data.title || "";
-      payload.channelName = data.author_name || "";
-      payload.thumbnail = data.thumbnail_url || payload.thumbnail;
+    if (showAlert) {
+      alert("Не удалось определить video id из URL.");
     }
+    return false;
+  }
+
+  let payload = null;
+  try {
+    payload = await fetchUrlImportPayload(inputUrl);
   } catch (error) {
-    console.warn("Не удалось получить oEmbed метаданные, используем только video id.", error);
+    console.warn("Локальный парсер недоступен, используем fallback по URL.", error);
+  }
+
+  if (!payload) {
+    payload = {
+      sourceVideoId: id,
+      thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+      stats: {
+        views: null,
+        likes: null,
+        dislikes: null,
+        comments: null,
+      },
+      comments: [],
+    };
+
+    try {
+      const response = await fetch(`https://noembed.com/embed?url=${encodeURIComponent(inputUrl)}`);
+      if (response.ok) {
+        const data = await response.json();
+        payload.title = data.title || "";
+        payload.channelName = data.author_name || "";
+        payload.thumbnail = data.thumbnail_url || payload.thumbnail;
+      }
+    } catch (error) {
+      console.warn("Не удалось получить oEmbed метаданные, используем только video id.", error);
+    }
   }
 
   await applyImportedDataToVideo(video, payload, "youtube_url", inputUrl);
-  alert("Импорт по URL завершен. Комментарии доступны через HTML импорт или локальный API.");
+  if (showAlert) {
+    alert("Импорт по URL завершен.");
+  }
+  return true;
+};
+
+const importVideoDataList = async (file) => {
+  if (!file) return;
+  const text = await file.text();
+  const parsed = JSON.parse(text);
+  const entries = Array.isArray(parsed) ? parsed : Array.isArray(parsed.videos) ? parsed.videos : [];
+  if (!entries.length) {
+    alert("Файл не содержит данных для импорта.");
+    return;
+  }
+
+  let importedCount = 0;
+  for (const entry of entries) {
+    const url = `${entry.url || ""}`.trim();
+    if (!url) continue;
+    const targetVideo = entry.id
+      ? state.videos.find((video) => video.id === entry.id)
+      : state.videos.find((video) => video.title === entry.title);
+    if (!targetVideo) continue;
+    try {
+      const ok = await importMetaFromUrl(url, { targetVideoId: targetVideo.id, showAlert: false });
+      if (ok) {
+        importedCount += 1;
+      }
+    } catch (error) {
+      console.warn("Не удалось импортировать запись", entry, error);
+    }
+  }
+
+  alert(`Импорт данных завершен: ${importedCount} видео обновлено.`);
 };
 
 const shuffle = (list) => {
@@ -1446,6 +1622,31 @@ if (exportBackupBtn) {
   exportBackupBtn.addEventListener("click", exportBackup);
 }
 
+if (exportPendingListBtn) {
+  exportPendingListBtn.addEventListener("click", exportPendingVideoList);
+}
+
+if (importVideoDataInput) {
+  importVideoDataInput.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      await importVideoDataList(file);
+    } catch (error) {
+      console.error(error);
+      alert("Не удалось импортировать данные из файла.");
+    }
+  });
+}
+
+if (localParserApiInput) {
+  localParserApiInput.value = getParserApiUrl();
+  localParserApiInput.addEventListener("change", () => {
+    saveParserApiUrl(localParserApiInput.value.trim());
+  });
+}
+
 if (importBackupInput) {
   importBackupInput.addEventListener("change", async (event) => {
     const file = event.target.files?.[0];
@@ -1545,6 +1746,8 @@ if (importUrlBtn && importUrlInput) {
     } catch (error) {
       console.error(error);
       alert("Ошибка импорта по URL.");
+    } finally {
+      importUrlInput.value = "";
     }
   });
 }
@@ -1664,6 +1867,9 @@ commentList.addEventListener("click", async (event) => {
     if (action === "dislike-comment") {
       comment.dislikes = (comment.dislikes || 0) + 1;
     }
+    if (action === "toggle-replies") {
+      comment.repliesExpanded = !comment.repliesExpanded;
+    }
     if (action === "reply-comment") {
       const wrapper = actionEl.closest(".comment");
       if (wrapper && !wrapper.querySelector(".reply-form")) {
@@ -1690,6 +1896,8 @@ commentList.addEventListener("click", async (event) => {
         text: textValue,
         createdAt: Date.now(),
       });
+      comment.replyCount = comment.replies.length;
+      comment.repliesExpanded = true;
     }
 
     await updateActiveVideo({ comments: video.comments });
