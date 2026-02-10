@@ -83,6 +83,28 @@
                     <span id="progressLabel" class="muted"></span>
                   </div>
                 </div>
+                <section class="import-tools">
+                  <h3>Импорт метаданных и превью</h3>
+                  <p class="muted">Работает локально в Live Server. HTML даёт максимум данных, URL — быстрый автозапрос.</p>
+                  <div class="import-actions">
+                    <button id="importHtmlBtn" class="btn">Импортировать HTML</button>
+                    <input id="importHtmlInput" type="file" accept=".html,text/html" hidden />
+                    <input id="importUrlInput" type="url" placeholder="https://www.youtube.com/watch?v=..." />
+                    <button id="importUrlBtn" class="btn">Импорт по URL</button>
+                  </div>
+                  <div class="video-stats-grid">
+                    <span><b>Просмотры:</b> <span id="watchViews">—</span></span>
+                    <span><b>Лайки (импорт):</b> <span id="watchLikesImported">—</span></span>
+                    <span><b>Дизлайки (импорт):</b> <span id="watchDislikesImported">—</span></span>
+                    <span><b>Комментарии:</b> <span id="watchCommentsImported">—</span></span>
+                    <span><b>Источник:</b> <span id="watchImportSource">Локально</span></span>
+                  </div>
+                  <div class="thumbnail-actions">
+                    <button id="changeThumbnailBtn" class="btn">Изменить превью</button>
+                    <button id="resetThumbnailBtn" class="btn">Сбросить превью</button>
+                    <input id="thumbnailInput" type="file" accept="image/*" hidden />
+                  </div>
+                </section>
                 <div class="notes">
                   <h3>Заметки / комментарии</h3>
                   <div id="commentList" class="comment-list"></div>
