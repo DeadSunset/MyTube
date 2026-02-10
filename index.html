@@ -85,7 +85,7 @@
                 </div>
                 <section class="import-tools">
                   <h3>Импорт метаданных и превью</h3>
-                  <p class="muted">Работает через локальный сервер на вашем компьютере. Нажмите «Импорт по URL», чтобы загрузить просмотры, лайки и до 100 комментариев с никнеймами.</p>
+                  <p class="muted">Работает по кнопке без дополнительной настройки: сначала пробуем прямой импорт через YouTube API, затем локальный парсер (если запущен). Загружаются просмотры, лайки и до 100 комментариев с никнеймами.</p>
                   <div class="import-actions">
                     <button id="importHtmlBtn" class="btn">Импортировать HTML</button>
                     <input id="importHtmlInput" type="file" accept=".html,text/html" hidden />
@@ -168,7 +168,7 @@
                 <input id="importVideoDataInput" type="file" accept="application/json" hidden />
               </div>
               <div class="profile-api-config">
-                <label for="localParserApiInput" class="muted">Локальный URL парсера (для полного импорта по ссылке)</label>
+                <label for="localParserApiInput" class="muted">Локальный URL парсера (необязательно, запасной вариант)</label>
                 <input id="localParserApiInput" type="url" placeholder="http://127.0.0.1:8787/youtube" />
               </div>
             </div>

@@ -74,6 +74,8 @@ const PAGE_SIZE = 40;
 const TIME_PATTERN = /\b(\d{1,2}:\d{2}(?::\d{2})?)\b/g;
 const PARSER_API_STORAGE_KEY = "mytube-parser-api-url";
 const DEFAULT_PARSER_API_URL = "http://127.0.0.1:8787/youtube";
+const DEFAULT_YOUTUBE_API_KEY = "AIzaSyCCXpvZAFDTm-pfCr2zYWj5LtVbjYzNqZo";
+const YOUTUBE_IMPORT_MAX_COMMENTS = 100;
 
 let state = {
   videos: [],
@@ -385,6 +387,83 @@ const buildCommentsFromApi = (comments = [], baseIndex = 0) => comments.map((com
     repliesExpanded: false,
   }, comment.author || "YouTube user");
 });
+
+
+const buildCommentsFromYouTubeApi = (threads = []) => threads
+  .map((item, index) => {
+    const topLevel = item?.snippet?.topLevelComment?.snippet;
+    if (!topLevel?.textDisplay) return null;
+    return {
+      id: item?.snippet?.topLevelComment?.id || `comment-${index}`,
+      author: topLevel.authorDisplayName || "YouTube user",
+      text: topLevel.textDisplay,
+      likes: Number.parseInt(topLevel.likeCount || "0", 10) || 0,
+      dislikes: 0,
+      replyCount: Number.parseInt(item?.snippet?.totalReplyCount || "0", 10) || 0,
+      replies: [],
+      order: index,
+    };
+  })
+  .filter(Boolean);
+
+const fetchYouTubeApiPayload = async (inputUrl, videoId) => {
+  const videoApiUrl = new URL("https://www.googleapis.com/youtube/v3/videos");
+  videoApiUrl.searchParams.set("part", "snippet,statistics");
+  videoApiUrl.searchParams.set("id", videoId);
+  videoApiUrl.searchParams.set("key", DEFAULT_YOUTUBE_API_KEY);
+
+  const commentsApiUrl = new URL("https://www.googleapis.com/youtube/v3/commentThreads");
+  commentsApiUrl.searchParams.set("part", "snippet");
+  commentsApiUrl.searchParams.set("videoId", videoId);
+  commentsApiUrl.searchParams.set("maxResults", `${YOUTUBE_IMPORT_MAX_COMMENTS}`);
+  commentsApiUrl.searchParams.set("order", "relevance");
+  commentsApiUrl.searchParams.set("textFormat", "plainText");
+  commentsApiUrl.searchParams.set("key", DEFAULT_YOUTUBE_API_KEY);
+
+  const [videoResponse, commentsResponse] = await Promise.all([
+    fetch(videoApiUrl.toString()),
+    fetch(commentsApiUrl.toString()),
+  ]);
+
+  if (!videoResponse.ok) {
+    throw new Error(`YouTube videos API error: ${videoResponse.status}`);
+  }
+  if (!commentsResponse.ok) {
+    throw new Error(`YouTube comments API error: ${commentsResponse.status}`);
+  }
+
+  const videoData = await videoResponse.json();
+  const commentsData = await commentsResponse.json();
+  const firstVideo = videoData?.items?.[0];
+  if (!firstVideo) {
+    throw new Error("Video not found in YouTube API response");
+  }
+
+  const comments = buildCommentsFromYouTubeApi(commentsData?.items || []);
+  return {
+    title: firstVideo?.snippet?.title || "",
+    channelName: firstVideo?.snippet?.channelTitle || "",
+    sourceVideoId: videoId,
+    thumbnail:
+      firstVideo?.snippet?.thumbnails?.maxres?.url ||
+      firstVideo?.snippet?.thumbnails?.high?.url ||
+      firstVideo?.snippet?.thumbnails?.medium?.url ||
+      firstVideo?.snippet?.thumbnails?.default?.url ||
+      `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    stats: {
+      views: Number.parseInt(firstVideo?.statistics?.viewCount || "0", 10) || 0,
+      likes: Number.parseInt(firstVideo?.statistics?.likeCount || "0", 10) || 0,
+      dislikes: null,
+      comments: comments.length,
+    },
+    comments: buildCommentsFromApi(comments),
+    importMeta: {
+      source: "youtube-browser-api",
+      sourceUrl: inputUrl,
+      commentsLimit: YOUTUBE_IMPORT_MAX_COMMENTS,
+    },
+  };
+};
 
 const fetchUrlImportPayload = async (inputUrl) => {
   const parserApiUrl = getParserApiUrl();
@@ -1392,10 +1471,19 @@ const importMetaFromUrl = async (inputUrl, options = {}) => {
   }
 
   let payload = null;
+
   try {
-    payload = await fetchUrlImportPayload(inputUrl);
+    payload = await fetchYouTubeApiPayload(inputUrl, id);
   } catch (error) {
-    console.warn("Локальный парсер недоступен, используем fallback по URL.", error);
+    console.warn("Импорт напрямую через YouTube API недоступен, пробуем локальный парсер.", error);
+  }
+
+  if (!payload) {
+    try {
+      payload = await fetchUrlImportPayload(inputUrl);
+    } catch (error) {
+      console.warn("Локальный парсер недоступен, используем fallback по URL.", error);
+    }
   }
 
   if (!payload) {
