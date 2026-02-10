@@ -52,6 +52,7 @@ const exportBackupBtn = document.getElementById("exportBackupBtn");
 const importBackupInput = document.getElementById("importBackupInput");
 const exportPendingListBtn = document.getElementById("exportPendingListBtn");
 const autoParseLibraryBtn = document.getElementById("autoParseLibraryBtn");
+const autoParseFirst20Btn = document.getElementById("autoParseFirst20Btn");
 const importVideoDataInput = document.getElementById("importVideoDataInput");
 const localParserApiInput = document.getElementById("localParserApiInput");
 const importHtmlBtn = document.getElementById("importHtmlBtn");
@@ -81,6 +82,7 @@ const YOUTUBE_IMPORT_MAX_REPLIES = 10;
 const YOUTUBE_SEARCH_MAX_RESULTS = 8;
 const YOUTUBE_MATCH_HIGH_CONFIDENCE = 90;
 const YOUTUBE_MATCH_LOW_CONFIDENCE = 80;
+const YOUTUBE_MATCH_MIN_FOR_TRY = 55;
 
 let state = {
   videos: [],
@@ -613,8 +615,10 @@ const shouldAutoparseVideo = (video) => {
   return !stateMeta.hasThumbnail || !stateMeta.hasComments || !stateMeta.hasStats;
 };
 
-const autoParseLibrary = async () => {
-  const targets = state.videos.filter((video) => shouldAutoparseVideo(video));
+const runAutoParse = async ({ limit = null, forceTopCandidates = false } = {}) => {
+  const allTargets = state.videos.filter((video) => shouldAutoparseVideo(video));
+  const targets = Number.isFinite(limit) ? allTargets.slice(0, limit) : allTargets;
+
   if (!targets.length) {
     alert("В библиотеке нет видео для автопарсинга.");
     return;
@@ -673,14 +677,47 @@ const autoParseLibrary = async () => {
 
   const reviewItems = [];
   let importedCount = 0;
+  let attemptedCount = 0;
 
   for (let i = 0; i < targets.length; i += 1) {
     const video = targets[i];
     const query = normalizeTitleForSearch(video.title || "");
-    const candidates = searchCache.get(query) || [];
-    const best = candidates[0];
+    const candidates = (searchCache.get(query) || []).slice(0, 5);
 
-    if (!best || best.score < YOUTUBE_MATCH_LOW_CONFIDENCE) {
+    let imported = false;
+    const candidatesToTry = forceTopCandidates
+      ? candidates.slice(0, 3)
+      : candidates.filter((item) => item.score >= YOUTUBE_MATCH_MIN_FOR_TRY).slice(0, 3);
+
+    for (const candidate of candidatesToTry) {
+      const url = `https://www.youtube.com/watch?v=${candidate.videoId}`;
+      attemptedCount += 1;
+      const ok = await importMetaFromUrl(url, { targetVideoId: video.id, showAlert: false });
+      if (ok) {
+        importedCount += 1;
+        imported = true;
+        if (candidate.score < YOUTUBE_MATCH_HIGH_CONFIDENCE) {
+          reviewItems.push({
+            id: video.id,
+            title: video.title,
+            normalizedTitle: query,
+            youtube: {
+              videoId: candidate.videoId,
+              url,
+              matchedTitle: candidate.title,
+              score: candidate.score,
+              confidence: candidate.score >= YOUTUBE_MATCH_LOW_CONFIDENCE ? "low" : "needs_review",
+              candidates: candidates.slice(0, 3),
+            },
+          });
+        }
+        break;
+      }
+      await sleep(120);
+    }
+
+    if (!imported) {
+      const best = candidates[0];
       reviewItems.push({
         id: video.id,
         title: video.title,
@@ -691,27 +728,6 @@ const autoParseLibrary = async () => {
           candidates: candidates.slice(0, 3),
         },
       });
-    } else {
-      const url = `https://www.youtube.com/watch?v=${best.videoId}`;
-      const ok = await importMetaFromUrl(url, { targetVideoId: video.id, showAlert: false });
-      if (ok) {
-        importedCount += 1;
-      }
-      if (best.score < YOUTUBE_MATCH_HIGH_CONFIDENCE) {
-        reviewItems.push({
-          id: video.id,
-          title: video.title,
-          normalizedTitle: query,
-          youtube: {
-            videoId: best.videoId,
-            url,
-            matchedTitle: best.title,
-            score: best.score,
-            confidence: "low",
-            candidates: candidates.slice(0, 3),
-          },
-        });
-      }
     }
 
     processed += 1;
@@ -719,7 +735,7 @@ const autoParseLibrary = async () => {
     if (importLabel) {
       importLabel.textContent = `Импорт метаданных: ${i + 1} / ${targets.length}`;
     }
-    await sleep(120);
+    await sleep(100);
   }
 
   resetImportStatus();
@@ -737,8 +753,12 @@ const autoParseLibrary = async () => {
     URL.revokeObjectURL(url);
   }
 
-  alert(`Автопарсинг завершен. Обновлено: ${importedCount} / ${targets.length}. ${reviewItems.length ? "Файл для проверки совпадений скачан." : ""}`);
+  alert(`Автопарсинг завершен. Обновлено: ${importedCount} / ${targets.length}. Попыток импорта: ${attemptedCount}. ${reviewItems.length ? "Файл для проверки совпадений скачан." : ""}`);
 };
+
+const autoParseLibrary = async () => runAutoParse();
+
+const autoParseFirst20 = async () => runAutoParse({ limit: 20, forceTopCandidates: true });
 
 const hasMeaningfulYoutubeImport = (payload) => {
   if (!payload || typeof payload !== "object") return false;
@@ -1999,6 +2019,18 @@ if (autoParseLibraryBtn) {
       console.error(error);
       resetImportStatus();
       alert("Не удалось выполнить автопарсинг библиотеки.");
+    }
+  });
+}
+
+if (autoParseFirst20Btn) {
+  autoParseFirst20Btn.addEventListener("click", async () => {
+    try {
+      await autoParseFirst20();
+    } catch (error) {
+      console.error(error);
+      resetImportStatus();
+      alert("Не удалось обновить первые 20 видео.");
     }
   });
 }
