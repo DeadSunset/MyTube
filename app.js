@@ -50,6 +50,18 @@ const importBarFill = document.getElementById("importBarFill");
 const profileBtn = document.getElementById("profileBtn");
 const exportBackupBtn = document.getElementById("exportBackupBtn");
 const importBackupInput = document.getElementById("importBackupInput");
+const importHtmlBtn = document.getElementById("importHtmlBtn");
+const importHtmlInput = document.getElementById("importHtmlInput");
+const importUrlInput = document.getElementById("importUrlInput");
+const importUrlBtn = document.getElementById("importUrlBtn");
+const watchViews = document.getElementById("watchViews");
+const watchLikesImported = document.getElementById("watchLikesImported");
+const watchDislikesImported = document.getElementById("watchDislikesImported");
+const watchCommentsImported = document.getElementById("watchCommentsImported");
+const watchImportSource = document.getElementById("watchImportSource");
+const changeThumbnailBtn = document.getElementById("changeThumbnailBtn");
+const resetThumbnailBtn = document.getElementById("resetThumbnailBtn");
+const thumbnailInput = document.getElementById("thumbnailInput");
 
 const DB_NAME = "mytube-db";
 const DB_VERSION = 1;
@@ -203,6 +215,179 @@ const formatCommentText = (text) => {
   );
 };
 
+const toDisplayValue = (value) => {
+  if (value === null || value === undefined || value === "") return "—";
+  return `${value}`;
+};
+
+const ensureVideoImported = (video) => {
+  if (!video.imported || typeof video.imported !== "object") {
+    video.imported = {
+      source: "local",
+      sourceUrl: "",
+      importedAt: null,
+      stats: {
+        views: null,
+        likes: null,
+        dislikes: null,
+        comments: null,
+      },
+    };
+  }
+  if (!video.imported.stats) {
+    video.imported.stats = { views: null, likes: null, dislikes: null, comments: null };
+  }
+  return video.imported;
+};
+
+const renderImportedStats = (video) => {
+  const imported = ensureVideoImported(video);
+  if (watchViews) watchViews.textContent = toDisplayValue(imported.stats.views);
+  if (watchLikesImported) watchLikesImported.textContent = toDisplayValue(imported.stats.likes);
+  if (watchDislikesImported) watchDislikesImported.textContent = toDisplayValue(imported.stats.dislikes);
+  if (watchCommentsImported) {
+    const commentCount = imported.stats.comments ?? (video.comments || []).length;
+    watchCommentsImported.textContent = toDisplayValue(commentCount);
+  }
+  if (watchImportSource) {
+    const source = imported.source === "youtube_html"
+      ? "YouTube HTML"
+      : imported.source === "youtube_url"
+        ? "YouTube URL"
+        : "Локально";
+    watchImportSource.textContent = source;
+  }
+};
+
+const normalizeComment = (comment, author = "Вы") => ({
+  id: comment.id || crypto.randomUUID(),
+  author: comment.author || author,
+  text: comment.text || "",
+  createdAt: comment.createdAt || Date.now(),
+  likes: Number.isFinite(comment.likes) ? comment.likes : 0,
+  dislikes: Number.isFinite(comment.dislikes) ? comment.dislikes : 0,
+  replies: Array.isArray(comment.replies)
+    ? comment.replies.map((reply) => ({
+        id: reply.id || crypto.randomUUID(),
+        author: reply.author || "Вы",
+        text: reply.text || "",
+        createdAt: reply.createdAt || Date.now(),
+      }))
+    : [],
+});
+
+const extractYouTubeVideoId = (urlOrId) => {
+  if (!urlOrId) return "";
+  if (/^[a-zA-Z0-9_-]{11}$/.test(urlOrId)) return urlOrId;
+  try {
+    const url = new URL(urlOrId);
+    if (url.hostname.includes("youtu.be")) {
+      return url.pathname.replace("/", "").slice(0, 11);
+    }
+    return (url.searchParams.get("v") || "").slice(0, 11);
+  } catch (_error) {
+    return "";
+  }
+};
+
+const parseCompactNumber = (value) => {
+  if (!value) return null;
+  const normalized = `${value}`.replace(/\s+/g, " ").trim().toLowerCase();
+  const number = Number.parseFloat(normalized.replace(/[^\d.,]/g, "").replace(",", "."));
+  if (!Number.isFinite(number)) return null;
+  if (normalized.includes("тыс")) return Math.round(number * 1_000);
+  if (normalized.includes("млн")) return Math.round(number * 1_000_000);
+  if (normalized.includes("млрд")) return Math.round(number * 1_000_000_000);
+  return Math.round(number);
+};
+
+const parseInitialJson = (html, marker) => {
+  const idx = html.indexOf(marker);
+  if (idx < 0) return null;
+  const start = html.indexOf("{", idx);
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < html.length; i += 1) {
+    const ch = html[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        const raw = html.slice(start, i + 1);
+        try {
+          return JSON.parse(raw);
+        } catch (_error) {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+};
+
+const collectCommentNodes = (node, bucket = []) => {
+  if (!node || typeof node !== "object") return bucket;
+  if (Array.isArray(node)) {
+    node.forEach((item) => collectCommentNodes(item, bucket));
+    return bucket;
+  }
+  if (node.commentRenderer) bucket.push(node.commentRenderer);
+  Object.values(node).forEach((value) => collectCommentNodes(value, bucket));
+  return bucket;
+};
+
+const parseYoutubeHtmlPayload = (htmlText) => {
+  const playerData = parseInitialJson(htmlText, "ytInitialPlayerResponse") || {};
+  const initialData = parseInitialJson(htmlText, "ytInitialData") || {};
+  const details = playerData.videoDetails || {};
+  const commentsRaw = collectCommentNodes(initialData);
+  const comments = commentsRaw.map((item) => {
+    const textRuns = item.contentText?.runs || [];
+    const text = textRuns.map((run) => run.text || "").join("").trim();
+    const author = item.authorText?.simpleText || "YouTube user";
+    const likes = parseCompactNumber(item.voteCount?.simpleText || item.voteCount?.accessibility?.accessibilityData?.label);
+    return normalizeComment({
+      id: item.commentId || crypto.randomUUID(),
+      author,
+      text,
+      likes: likes || 0,
+      createdAt: Date.now(),
+      replies: [],
+    }, author);
+  }).filter((item) => item.text);
+
+  const viewCount = parseCompactNumber(details.viewCount || details.shortViewCountText?.simpleText);
+  return {
+    title: details.title || "",
+    channelName: details.author || "",
+    sourceVideoId: details.videoId || "",
+    stats: {
+      views: viewCount,
+      likes: null,
+      dislikes: null,
+      comments: comments.length,
+    },
+    comments,
+  };
+};
+
+
 const loadWatchedHistory = () => {
   try {
     const saved = JSON.parse(localStorage.getItem("mytube-watched-history") || "[]");
@@ -259,6 +444,7 @@ const buildBackupData = () => ({
     likes: video.likes,
     dislikes: video.dislikes,
     comments: video.comments,
+    imported: video.imported,
     progress: video.progress,
     watched: video.watched,
     fileKey: video.fileKey,
@@ -321,7 +507,8 @@ const mergeBackup = async (data) => {
       thumbnail: video.thumbnail,
       likes: video.likes || 0,
       dislikes: video.dislikes || 0,
-      comments: Array.isArray(video.comments) ? video.comments : [],
+      comments: Array.isArray(video.comments) ? video.comments.map((comment) => normalizeComment(comment, comment.author)) : [],
+      imported: video.imported || null,
       progress: video.progress || 0,
       watched: Boolean(video.watched),
       fileKey: video.fileKey,
@@ -347,16 +534,18 @@ const loadState = async () => {
   state.videos = (videos || []).map((video) => ({
     ...video,
     comments: Array.isArray(video.comments)
-      ? video.comments
+      ? video.comments.map((comment) => normalizeComment(comment, comment.author))
       : video.comment
       ? [
-          {
+          normalizeComment({
             id: crypto.randomUUID(),
+            author: "Вы",
             text: video.comment,
             createdAt: Date.now(),
-          },
+          }),
         ]
       : [],
+    imported: video.imported || null,
     watched: Boolean(video.watched),
   }));
   state.folders = folders || [];
@@ -619,24 +808,54 @@ const renderRecommendations = (currentVideo) => {
 
 const renderComments = (video) => {
   commentList.innerHTML = "";
-  if (!video.comments.length) {
+  const comments = (video.comments || []).map((comment) => normalizeComment(comment, comment.author));
+  video.comments = comments;
+  if (!comments.length) {
     const empty = document.createElement("p");
     empty.className = "muted";
-    empty.textContent = "Заметок пока нет.";
+    empty.textContent = "Комментариев пока нет.";
     commentList.appendChild(empty);
     return;
   }
-  video.comments.forEach((comment) => {
+
+  comments.forEach((comment) => {
     const wrapper = document.createElement("div");
     wrapper.className = "comment";
-    const text = document.createElement("p");
-    text.innerHTML = formatCommentText(comment.text);
+    wrapper.dataset.commentId = comment.id;
+
+    const header = document.createElement("div");
+    header.className = "comment-header";
+    const author = document.createElement("strong");
+    author.textContent = comment.author || "Пользователь";
     const time = document.createElement("time");
     time.textContent = new Date(comment.createdAt).toLocaleString("ru-RU");
-    wrapper.append(text, time);
+    header.append(author, time);
+
+    const textNode = document.createElement("p");
+    textNode.innerHTML = formatCommentText(comment.text || "");
+
+    const actions = document.createElement("div");
+    actions.className = "comment-actions";
+    actions.innerHTML = `
+      <button class="btn" data-action="like-comment" data-comment-id="${comment.id}">👍 ${comment.likes || 0}</button>
+      <button class="btn" data-action="dislike-comment" data-comment-id="${comment.id}">👎 ${comment.dislikes || 0}</button>
+      <button class="btn" data-action="reply-comment" data-comment-id="${comment.id}">Ответить</button>
+    `;
+
+    const replies = document.createElement("div");
+    replies.className = "comment-replies";
+    (comment.replies || []).forEach((reply) => {
+      const item = document.createElement("div");
+      item.className = "reply-item";
+      item.innerHTML = `<b>${escapeHtml(reply.author || "Вы")}</b>: ${formatCommentText(reply.text || "")}`;
+      replies.appendChild(item);
+    });
+
+    wrapper.append(header, textNode, actions, replies);
     commentList.appendChild(wrapper);
   });
 };
+
 
 
 const switchView = (view) => {
@@ -673,6 +892,7 @@ const openVideo = async (videoId) => {
   dislikeCount.textContent = video.dislikes || 0;
   commentInput.value = "";
   renderComments(video);
+  renderImportedStats(video);
 
   const file = await getVideoFile(video);
   const url = URL.createObjectURL(file);
@@ -979,6 +1199,92 @@ const updateActiveVideo = async (updates) => {
   await putItem(VIDEO_STORE, video);
 };
 
+const applyImportedDataToVideo = async (video, payload, source, sourceUrl = "") => {
+  if (!video || !payload) return;
+  const imported = ensureVideoImported(video);
+  imported.source = source;
+  imported.sourceUrl = sourceUrl;
+  imported.importedAt = Date.now();
+  imported.sourceVideoId = payload.sourceVideoId || imported.sourceVideoId || "";
+  imported.stats = {
+    views: payload.stats?.views ?? null,
+    likes: payload.stats?.likes ?? null,
+    dislikes: payload.stats?.dislikes ?? null,
+    comments: payload.stats?.comments ?? (payload.comments || []).length,
+  };
+  if (payload.title) {
+    video.title = payload.title;
+    watchTitle.textContent = payload.title;
+  }
+  if (payload.channelName) {
+    video.channelName = payload.channelName;
+  }
+  if (payload.thumbnail) {
+    video.thumbnail = payload.thumbnail;
+  }
+  if (Array.isArray(payload.comments) && payload.comments.length) {
+    video.comments = payload.comments.map((comment) => normalizeComment(comment, comment.author || "YouTube user"));
+  }
+  await updateActiveVideo({
+    title: video.title,
+    channelName: video.channelName,
+    thumbnail: video.thumbnail,
+    comments: video.comments,
+    imported,
+  });
+  renderImportedStats(video);
+  renderComments(video);
+  renderVideos({ reset: true });
+};
+
+const importMetaFromHtmlFile = async (file) => {
+  const video = state.videos.find((item) => item.id === state.activeVideoId);
+  if (!video || !file) return;
+  const htmlText = await file.text();
+  const payload = parseYoutubeHtmlPayload(htmlText);
+  if (!payload.title && !(payload.comments || []).length) {
+    alert("Не удалось распарсить YouTube HTML. Попробуйте сохранить полную страницу видео.");
+    return;
+  }
+  await applyImportedDataToVideo(video, payload, "youtube_html", "local-html");
+  alert("HTML импорт завершен.");
+};
+
+const importMetaFromUrl = async (inputUrl) => {
+  const video = state.videos.find((item) => item.id === state.activeVideoId);
+  if (!video || !inputUrl) return;
+  const id = extractYouTubeVideoId(inputUrl);
+  if (!id) {
+    alert("Не удалось определить video id из URL.");
+    return;
+  }
+  const payload = {
+    sourceVideoId: id,
+    thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+    stats: {
+      views: null,
+      likes: null,
+      dislikes: null,
+      comments: null,
+    },
+  };
+
+  try {
+    const response = await fetch(`https://noembed.com/embed?url=${encodeURIComponent(inputUrl)}`);
+    if (response.ok) {
+      const data = await response.json();
+      payload.title = data.title || "";
+      payload.channelName = data.author_name || "";
+      payload.thumbnail = data.thumbnail_url || payload.thumbnail;
+    }
+  } catch (error) {
+    console.warn("Не удалось получить oEmbed метаданные, используем только video id.", error);
+  }
+
+  await applyImportedDataToVideo(video, payload, "youtube_url", inputUrl);
+  alert("Импорт по URL завершен. Комментарии доступны через HTML импорт или локальный API.");
+};
+
 const shuffle = (list) => {
   const array = [...list];
   for (let i = array.length - 1; i > 0; i -= 1) {
@@ -1201,6 +1507,83 @@ if (durationMaxInput) {
   durationMaxInput.addEventListener("input", handleDurationFilter);
 }
 
+if (importHtmlBtn && importHtmlInput) {
+  importHtmlBtn.addEventListener("click", () => {
+    if (!state.activeVideoId) {
+      alert("Сначала откройте видео.");
+      return;
+    }
+    importHtmlInput.click();
+  });
+
+  importHtmlInput.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      await importMetaFromHtmlFile(file);
+    } catch (error) {
+      console.error(error);
+      alert("Ошибка импорта HTML.");
+    }
+  });
+}
+
+if (importUrlBtn && importUrlInput) {
+  importUrlBtn.addEventListener("click", async () => {
+    if (!state.activeVideoId) {
+      alert("Сначала откройте видео.");
+      return;
+    }
+    const url = importUrlInput.value.trim();
+    if (!url) {
+      alert("Вставьте URL видео.");
+      return;
+    }
+    try {
+      await importMetaFromUrl(url);
+    } catch (error) {
+      console.error(error);
+      alert("Ошибка импорта по URL.");
+    }
+  });
+}
+
+if (changeThumbnailBtn && thumbnailInput) {
+  changeThumbnailBtn.addEventListener("click", () => {
+    if (!state.activeVideoId) {
+      alert("Сначала откройте видео.");
+      return;
+    }
+    thumbnailInput.click();
+  });
+
+  thumbnailInput.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const current = state.videos.find((item) => item.id === state.activeVideoId);
+      if (!current) return;
+      current.thumbnail = `${reader.result || ""}`;
+      await updateActiveVideo({ thumbnail: current.thumbnail });
+      renderVideos({ reset: true });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+if (resetThumbnailBtn) {
+  resetThumbnailBtn.addEventListener("click", async () => {
+    const current = state.videos.find((item) => item.id === state.activeVideoId);
+    if (!current) return;
+    current.thumbnail = "";
+    await updateActiveVideo({ thumbnail: "" });
+    renderVideos({ reset: true });
+  });
+}
+
 likeBtn.addEventListener("click", async () => {
   const current = state.videos.find((item) => item.id === state.activeVideoId);
   if (!current) return;
@@ -1222,11 +1605,16 @@ saveCommentBtn.addEventListener("click", async () => {
   if (!text) return;
   const video = state.videos.find((item) => item.id === state.activeVideoId);
   if (!video) return;
-  const newComment = {
+  const newComment = normalizeComment({
     id: crypto.randomUUID(),
+    author: "Вы",
     text,
     createdAt: Date.now(),
-  };
+    likes: 0,
+    dislikes: 0,
+    replies: [],
+  });
+  video.comments = video.comments || [];
   video.comments.push(newComment);
   commentInput.value = "";
   await updateActiveVideo({ comments: video.comments });
@@ -1257,9 +1645,58 @@ window.addEventListener("hashchange", () => {
   }
 });
 
-commentList.addEventListener("click", (event) => {
+commentList.addEventListener("click", async (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
+
+  const actionEl = target.closest("[data-action]");
+  if (actionEl instanceof HTMLElement) {
+    const action = actionEl.dataset.action;
+    const commentId = actionEl.dataset.commentId;
+    const video = state.videos.find((item) => item.id === state.activeVideoId);
+    if (!video || !commentId) return;
+    const comment = (video.comments || []).find((item) => item.id === commentId);
+    if (!comment) return;
+
+    if (action === "like-comment") {
+      comment.likes = (comment.likes || 0) + 1;
+    }
+    if (action === "dislike-comment") {
+      comment.dislikes = (comment.dislikes || 0) + 1;
+    }
+    if (action === "reply-comment") {
+      const wrapper = actionEl.closest(".comment");
+      if (wrapper && !wrapper.querySelector(".reply-form")) {
+        const form = document.createElement("div");
+        form.className = "reply-form";
+        form.innerHTML = `
+          <input class="reply-input" type="text" placeholder="Ваш ответ..." />
+          <button class="btn" data-action="send-reply" data-comment-id="${comment.id}">Отправить</button>
+        `;
+        wrapper.appendChild(form);
+      }
+      return;
+    }
+    if (action === "send-reply") {
+      const wrapper = actionEl.closest(".comment");
+      const input = wrapper?.querySelector(".reply-input");
+      if (!(input instanceof HTMLInputElement)) return;
+      const textValue = input.value.trim();
+      if (!textValue) return;
+      comment.replies = comment.replies || [];
+      comment.replies.push({
+        id: crypto.randomUUID(),
+        author: "Вы",
+        text: textValue,
+        createdAt: Date.now(),
+      });
+    }
+
+    await updateActiveVideo({ comments: video.comments });
+    renderComments(video);
+    return;
+  }
+
   const timecode = target.dataset.time;
   if (!timecode) return;
   event.preventDefault();
