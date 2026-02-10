@@ -83,6 +83,28 @@
                     <span id="progressLabel" class="muted"></span>
                   </div>
                 </div>
+                <section class="import-tools">
+                  <h3>Импорт метаданных и превью</h3>
+                  <p class="muted">Работает локально в Live Server. Для полного импорта комментариев/лайков/просмотров по URL можно подключить локальный парсер API.</p>
+                  <div class="import-actions">
+                    <button id="importHtmlBtn" class="btn">Импортировать HTML</button>
+                    <input id="importHtmlInput" type="file" accept=".html,text/html" hidden />
+                    <input id="importUrlInput" type="url" placeholder="https://www.youtube.com/watch?v=..." />
+                    <button id="importUrlBtn" class="btn">Импорт по URL</button>
+                  </div>
+                  <div class="video-stats-grid">
+                    <span><b>Просмотры:</b> <span id="watchViews">—</span></span>
+                    <span><b>Лайки (импорт):</b> <span id="watchLikesImported">—</span></span>
+                    <span><b>Дизлайки (импорт):</b> <span id="watchDislikesImported">—</span></span>
+                    <span><b>Комментарии:</b> <span id="watchCommentsImported">—</span></span>
+                    <span><b>Источник:</b> <span id="watchImportSource">Локально</span></span>
+                  </div>
+                  <div class="thumbnail-actions">
+                    <button id="changeThumbnailBtn" class="btn">Изменить превью</button>
+                    <button id="resetThumbnailBtn" class="btn">Сбросить превью</button>
+                    <input id="thumbnailInput" type="file" accept="image/*" hidden />
+                  </div>
+                </section>
                 <div class="notes">
                   <h3>Заметки / комментарии</h3>
                   <div id="commentList" class="comment-list"></div>
@@ -139,6 +161,15 @@
                 <button id="exportBackupBtn" class="btn">Создать бекап</button>
                 <label class="btn" for="importBackupInput">Импорт бекапа</label>
                 <input id="importBackupInput" type="file" accept="application/json" hidden />
+              </div>
+              <div class="profile-actions profile-import-actions">
+                <button id="exportPendingListBtn" class="btn">Экспортировать список видео без превью/комментов</button>
+                <label class="btn" for="importVideoDataInput">Импортировать данные</label>
+                <input id="importVideoDataInput" type="file" accept="application/json" hidden />
+              </div>
+              <div class="profile-api-config">
+                <label for="localParserApiInput" class="muted">Локальный URL парсера (для полного импорта по ссылке)</label>
+                <input id="localParserApiInput" type="url" placeholder="http://127.0.0.1:8787/youtube" />
               </div>
             </div>
           </div>
