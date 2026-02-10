@@ -15,6 +15,10 @@ const { URL } = require("node:url");
 
 const PORT = Number.parseInt(process.env.MYTUBE_PARSER_PORT || "8787", 10);
 const HOST = process.env.MYTUBE_PARSER_HOST || "127.0.0.1";
+const DEFAULT_YOUTUBE_API_KEY = "AIzaSyCCXpvZAFDTm-pfCr2zYWj5LtVbjYzNqZo";
+const YOUTUBE_API_KEY = process.env.MYTUBE_YOUTUBE_API_KEY || DEFAULT_YOUTUBE_API_KEY;
+const MAX_COMMENTS = 50;
+const MAX_REPLIES = 10;
 
 const json = (res, status, payload) => {
   res.writeHead(status, {
@@ -23,6 +27,49 @@ const json = (res, status, payload) => {
   });
   res.end(JSON.stringify(payload));
 };
+
+const errorToMessage = (error) => {
+  if (!error) return "Unknown error";
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "object" && error.code) return `${error.code}`;
+  return String(error);
+};
+
+const fetchJson = (targetUrl) =>
+  new Promise((resolve, reject) => {
+    const req = https.get(
+      targetUrl,
+      {
+        headers: {
+          "User-Agent": "MyTube Local Parser/1.0",
+          Accept: "application/json",
+        },
+      },
+      (res) => {
+        if (res.statusCode && res.statusCode >= 400) {
+          reject(new Error(`API responded with ${res.statusCode}`));
+          res.resume();
+          return;
+        }
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          body += chunk;
+        });
+        res.on("end", () => {
+          try {
+            resolve(JSON.parse(body));
+          } catch (error) {
+            reject(error);
+          }
+        });
+      }
+    );
+    req.on("error", reject);
+    req.setTimeout(15000, () => {
+      req.destroy(new Error("Request timeout"));
+    });
+  });
 
 const parseObjectFromIndex = (html, start) => {
   if (start < 0) return null;
@@ -225,6 +272,92 @@ const parseWatchPayload = (html, sourceUrl) => {
   };
 };
 
+const mapApiReply = (reply, commentOrder, replyOrder) => {
+  const snippet = reply?.snippet;
+  if (!snippet?.textDisplay) return null;
+  return {
+    id: reply?.id || `reply-${commentOrder}-${replyOrder}`,
+    author: snippet.authorDisplayName || "YouTube user",
+    text: snippet.textDisplay,
+    createdAt: Date.now(),
+  };
+};
+
+const mapApiComment = (item, order) => {
+  const topLevel = item?.snippet?.topLevelComment?.snippet;
+  if (!topLevel?.textDisplay) return null;
+
+  const replyItems = Array.isArray(item?.replies?.comments)
+    ? item.replies.comments.slice(0, MAX_REPLIES)
+    : [];
+
+  const replies = replyItems
+    .map((reply, replyOrder) => mapApiReply(reply, order, replyOrder))
+    .filter(Boolean);
+
+  return {
+    id: item?.snippet?.topLevelComment?.id || `comment-${order}`,
+    author: topLevel.authorDisplayName || "YouTube user",
+    text: topLevel.textDisplay,
+    likes: Number.parseInt(topLevel.likeCount || "0", 10) || 0,
+    dislikes: 0,
+    replyCount: Number.parseInt(item?.snippet?.totalReplyCount || "0", 10) || 0,
+    replies,
+    order,
+  };
+};
+
+const fetchYouTubeApiPayload = async (videoId, sourceUrl) => {
+  const videoApiUrl = new URL("https://www.googleapis.com/youtube/v3/videos");
+  videoApiUrl.searchParams.set("part", "snippet,statistics");
+  videoApiUrl.searchParams.set("id", videoId);
+  videoApiUrl.searchParams.set("key", YOUTUBE_API_KEY);
+
+  const commentsApiUrl = new URL("https://www.googleapis.com/youtube/v3/commentThreads");
+  commentsApiUrl.searchParams.set("part", "snippet,replies");
+  commentsApiUrl.searchParams.set("videoId", videoId);
+  commentsApiUrl.searchParams.set("maxResults", `${MAX_COMMENTS}`);
+  commentsApiUrl.searchParams.set("order", "relevance");
+  commentsApiUrl.searchParams.set("textFormat", "plainText");
+  commentsApiUrl.searchParams.set("key", YOUTUBE_API_KEY);
+
+  const [videoData, commentsData] = await Promise.all([
+    fetchJson(videoApiUrl),
+    fetchJson(commentsApiUrl),
+  ]);
+
+  const firstVideo = videoData?.items?.[0];
+  if (!firstVideo) {
+    throw new Error("Video not found in YouTube API response");
+  }
+
+  const comments = Array.isArray(commentsData?.items)
+    ? commentsData.items
+        .map((item, index) => mapApiComment(item, index))
+        .filter(Boolean)
+    : [];
+
+  return {
+    sourceUrl,
+    sourceVideoId: videoId,
+    title: firstVideo?.snippet?.title || "",
+    channelName: firstVideo?.snippet?.channelTitle || "",
+    thumbnail:
+      firstVideo?.snippet?.thumbnails?.maxres?.url ||
+      firstVideo?.snippet?.thumbnails?.high?.url ||
+      firstVideo?.snippet?.thumbnails?.medium?.url ||
+      firstVideo?.snippet?.thumbnails?.default?.url ||
+      "",
+    stats: {
+      views: Number.parseInt(firstVideo?.statistics?.viewCount || "0", 10) || 0,
+      likes: Number.parseInt(firstVideo?.statistics?.likeCount || "0", 10) || 0,
+      dislikes: null,
+      comments: comments.length,
+    },
+    comments,
+  };
+};
+
 const extractVideoId = (raw) => {
   if (!raw) return "";
   if (/^[a-zA-Z0-9_-]{11}$/.test(raw)) return raw;
@@ -272,13 +405,38 @@ const server = http.createServer(async (req, res) => {
   const watchUrl = `https://www.youtube.com/watch?v=${videoId}&hl=ru`;
 
   try {
-    const html = await fetchText(watchUrl);
-    const payload = parseWatchPayload(html, inputUrl || watchUrl);
+    let payload = null;
+    let apiError = null;
+
+    if (YOUTUBE_API_KEY) {
+      try {
+        payload = await fetchYouTubeApiPayload(videoId, inputUrl || watchUrl);
+        payload.meta = {
+          parser: "youtube-data-api-v3",
+          commentsLimit: MAX_COMMENTS,
+          repliesLimit: MAX_REPLIES,
+        };
+      } catch (error) {
+        apiError = error;
+      }
+    }
+
+    if (!payload) {
+      const html = await fetchText(watchUrl);
+      payload = parseWatchPayload(html, inputUrl || watchUrl);
+      payload.meta = {
+        parser: "youtube-watch-html",
+        commentsLimit: payload.comments.length,
+        repliesLimit: MAX_REPLIES,
+        apiFallbackError: apiError ? errorToMessage(apiError) : undefined,
+      };
+    }
+
     json(res, 200, payload);
   } catch (error) {
     json(res, 500, {
       error: "Failed to parse YouTube page",
-      details: error instanceof Error ? error.message : String(error),
+      details: errorToMessage(error),
     });
   }
 });
