@@ -17,7 +17,8 @@ const PORT = Number.parseInt(process.env.MYTUBE_PARSER_PORT || "8787", 10);
 const HOST = process.env.MYTUBE_PARSER_HOST || "127.0.0.1";
 const DEFAULT_YOUTUBE_API_KEY = "AIzaSyCCXpvZAFDTm-pfCr2zYWj5LtVbjYzNqZo";
 const YOUTUBE_API_KEY = process.env.MYTUBE_YOUTUBE_API_KEY || DEFAULT_YOUTUBE_API_KEY;
-const MAX_COMMENTS = 100;
+const MAX_COMMENTS = 50;
+const MAX_REPLIES = 10;
 
 const json = (res, status, payload) => {
   res.writeHead(status, {
@@ -271,9 +272,28 @@ const parseWatchPayload = (html, sourceUrl) => {
   };
 };
 
+const mapApiReply = (reply, commentOrder, replyOrder) => {
+  const snippet = reply?.snippet;
+  if (!snippet?.textDisplay) return null;
+  return {
+    id: reply?.id || `reply-${commentOrder}-${replyOrder}`,
+    author: snippet.authorDisplayName || "YouTube user",
+    text: snippet.textDisplay,
+    createdAt: Date.now(),
+  };
+};
+
 const mapApiComment = (item, order) => {
   const topLevel = item?.snippet?.topLevelComment?.snippet;
   if (!topLevel?.textDisplay) return null;
+
+  const replyItems = Array.isArray(item?.replies?.comments)
+    ? item.replies.comments.slice(0, MAX_REPLIES)
+    : [];
+
+  const replies = replyItems
+    .map((reply, replyOrder) => mapApiReply(reply, order, replyOrder))
+    .filter(Boolean);
 
   return {
     id: item?.snippet?.topLevelComment?.id || `comment-${order}`,
@@ -282,7 +302,7 @@ const mapApiComment = (item, order) => {
     likes: Number.parseInt(topLevel.likeCount || "0", 10) || 0,
     dislikes: 0,
     replyCount: Number.parseInt(item?.snippet?.totalReplyCount || "0", 10) || 0,
-    replies: [],
+    replies,
     order,
   };
 };
@@ -294,7 +314,7 @@ const fetchYouTubeApiPayload = async (videoId, sourceUrl) => {
   videoApiUrl.searchParams.set("key", YOUTUBE_API_KEY);
 
   const commentsApiUrl = new URL("https://www.googleapis.com/youtube/v3/commentThreads");
-  commentsApiUrl.searchParams.set("part", "snippet");
+  commentsApiUrl.searchParams.set("part", "snippet,replies");
   commentsApiUrl.searchParams.set("videoId", videoId);
   commentsApiUrl.searchParams.set("maxResults", `${MAX_COMMENTS}`);
   commentsApiUrl.searchParams.set("order", "relevance");
@@ -394,6 +414,7 @@ const server = http.createServer(async (req, res) => {
         payload.meta = {
           parser: "youtube-data-api-v3",
           commentsLimit: MAX_COMMENTS,
+          repliesLimit: MAX_REPLIES,
         };
       } catch (error) {
         apiError = error;
@@ -406,6 +427,7 @@ const server = http.createServer(async (req, res) => {
       payload.meta = {
         parser: "youtube-watch-html",
         commentsLimit: payload.comments.length,
+        repliesLimit: MAX_REPLIES,
         apiFallbackError: apiError ? errorToMessage(apiError) : undefined,
       };
     }

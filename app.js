@@ -75,7 +75,8 @@ const TIME_PATTERN = /\b(\d{1,2}:\d{2}(?::\d{2})?)\b/g;
 const PARSER_API_STORAGE_KEY = "mytube-parser-api-url";
 const DEFAULT_PARSER_API_URL = "http://127.0.0.1:8787/youtube";
 const DEFAULT_YOUTUBE_API_KEY = "AIzaSyCCXpvZAFDTm-pfCr2zYWj5LtVbjYzNqZo";
-const YOUTUBE_IMPORT_MAX_COMMENTS = 100;
+const YOUTUBE_IMPORT_MAX_COMMENTS = 50;
+const YOUTUBE_IMPORT_MAX_REPLIES = 10;
 
 let state = {
   videos: [],
@@ -332,23 +333,39 @@ const saveParserApiUrl = (value) => {
 const isVideoMissingMeta = (video) => {
   const hasThumbnail = Boolean(video.thumbnail);
   const hasComments = Array.isArray(video.comments) && video.comments.length > 0;
-  const imported = video.imported;
-  const hasImportedStats = Boolean(
-    imported?.stats &&
-    (imported.stats.views !== null || imported.stats.likes !== null || imported.stats.dislikes !== null)
-  );
-  return !hasThumbnail && !hasComments && !hasImportedStats;
+  return !hasThumbnail || !hasComments;
 };
 
-const exportPendingVideoList = () => {
-  const pendingVideos = state.videos
-    .filter((video) => isVideoMissingMeta(video))
-    .map((video) => ({
-      id: video.id,
-      title: video.title,
-      folderName: video.folderName || "",
-      channelName: video.channelName || "",
-    }));
+const exportPendingVideoList = async () => {
+  const pendingVideos = [];
+  const total = state.videos.length;
+
+  updateImportStatus(0, total);
+  if (importLabel) {
+    importLabel.textContent = `Проверка видео: 0 / ${total}`;
+  }
+
+  for (let index = 0; index < total; index += 1) {
+    const video = state.videos[index];
+    if (isVideoMissingMeta(video)) {
+      pendingVideos.push({
+        id: video.id,
+        title: video.title,
+        folderName: video.folderName || "",
+        channelName: video.channelName || "",
+        hasThumbnail: Boolean(video.thumbnail),
+        commentsCount: Array.isArray(video.comments) ? video.comments.length : 0,
+      });
+    }
+
+    if ((index + 1) % 50 === 0 || index + 1 === total) {
+      updateImportStatus(index + 1, total);
+      if (importLabel) {
+        importLabel.textContent = `Проверка видео: ${index + 1} / ${total}`;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
 
   const blob = new Blob([JSON.stringify({ videos: pendingVideos }, null, 2)], {
     type: "application/json",
@@ -361,7 +378,8 @@ const exportPendingVideoList = () => {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
-  alert(`Экспортировано ${pendingVideos.length} видео без превью/комментариев.`);
+  resetImportStatus();
+  alert(`Экспортировано ${pendingVideos.length} видео без превью ИЛИ комментариев.`);
 };
 
 const buildCommentsFromApi = (comments = [], baseIndex = 0) => comments.map((comment, index) => {
@@ -393,6 +411,24 @@ const buildCommentsFromYouTubeApi = (threads = []) => threads
   .map((item, index) => {
     const topLevel = item?.snippet?.topLevelComment?.snippet;
     if (!topLevel?.textDisplay) return null;
+
+    const replyItems = Array.isArray(item?.replies?.comments)
+      ? item.replies.comments.slice(0, YOUTUBE_IMPORT_MAX_REPLIES)
+      : [];
+
+    const replies = replyItems
+      .map((reply, replyIndex) => {
+        const replySnippet = reply?.snippet;
+        if (!replySnippet?.textDisplay) return null;
+        return {
+          id: reply?.id || `reply-${index}-${replyIndex}`,
+          author: replySnippet.authorDisplayName || "YouTube user",
+          text: replySnippet.textDisplay,
+          createdAt: Date.now(),
+        };
+      })
+      .filter(Boolean);
+
     return {
       id: item?.snippet?.topLevelComment?.id || `comment-${index}`,
       author: topLevel.authorDisplayName || "YouTube user",
@@ -400,7 +436,7 @@ const buildCommentsFromYouTubeApi = (threads = []) => threads
       likes: Number.parseInt(topLevel.likeCount || "0", 10) || 0,
       dislikes: 0,
       replyCount: Number.parseInt(item?.snippet?.totalReplyCount || "0", 10) || 0,
-      replies: [],
+      replies,
       order: index,
     };
   })
@@ -413,7 +449,7 @@ const fetchYouTubeApiPayload = async (inputUrl, videoId) => {
   videoApiUrl.searchParams.set("key", DEFAULT_YOUTUBE_API_KEY);
 
   const commentsApiUrl = new URL("https://www.googleapis.com/youtube/v3/commentThreads");
-  commentsApiUrl.searchParams.set("part", "snippet");
+  commentsApiUrl.searchParams.set("part", "snippet,replies");
   commentsApiUrl.searchParams.set("videoId", videoId);
   commentsApiUrl.searchParams.set("maxResults", `${YOUTUBE_IMPORT_MAX_COMMENTS}`);
   commentsApiUrl.searchParams.set("order", "relevance");
