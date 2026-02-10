@@ -489,6 +489,15 @@ const fetchUrlImportPayload = async (inputUrl) => {
   return payload;
 };
 
+const hasMeaningfulYoutubeImport = (payload) => {
+  if (!payload || typeof payload !== "object") return false;
+  const views = payload.stats?.views;
+  const likes = payload.stats?.likes;
+  const commentsFromStats = payload.stats?.comments;
+  const commentsLength = Array.isArray(payload.comments) ? payload.comments.length : 0;
+  return Number.isFinite(views) || Number.isFinite(likes) || Number.isFinite(commentsFromStats) || commentsLength > 0;
+};
+
 const parseInitialJson = (html, marker) => {
   const idx = html.indexOf(marker);
   if (idx < 0) return null;
@@ -1471,9 +1480,11 @@ const importMetaFromUrl = async (inputUrl, options = {}) => {
   }
 
   let payload = null;
+  let importedSource = "unknown";
 
   try {
     payload = await fetchYouTubeApiPayload(inputUrl, id);
+    importedSource = "youtube-browser-api";
   } catch (error) {
     console.warn("Импорт напрямую через YouTube API недоступен, пробуем локальный парсер.", error);
   }
@@ -1481,6 +1492,7 @@ const importMetaFromUrl = async (inputUrl, options = {}) => {
   if (!payload) {
     try {
       payload = await fetchUrlImportPayload(inputUrl);
+      importedSource = "local-parser";
     } catch (error) {
       console.warn("Локальный парсер недоступен, используем fallback по URL.", error);
     }
@@ -1510,11 +1522,24 @@ const importMetaFromUrl = async (inputUrl, options = {}) => {
     } catch (error) {
       console.warn("Не удалось получить oEmbed метаданные, используем только video id.", error);
     }
+    importedSource = "oembed-fallback";
+  }
+
+  if (!hasMeaningfulYoutubeImport(payload)) {
+    if (showAlert) {
+      alert("Не удалось загрузить просмотры/лайки/комментарии по URL. Попробуйте позже или запустите локальный парсер (node tools/local-youtube-parser.js).");
+    }
+    return false;
   }
 
   await applyImportedDataToVideo(video, payload, "youtube_url", inputUrl);
   if (showAlert) {
-    alert("Импорт по URL завершен.");
+    const sourceLabel = importedSource === "youtube-browser-api"
+      ? "YouTube API"
+      : importedSource === "local-parser"
+        ? "локальный парсер"
+        : "fallback";
+    alert(`Импорт по URL завершен (${sourceLabel}).`);
   }
   return true;
 };
