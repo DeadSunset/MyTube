@@ -257,7 +257,7 @@ body {
   gap: 8px;
 }
 
-#localParserApiInput {
+#channelUrlInput {
   width: 100%;
   background: #121212;
   border: 1px solid #303030;
