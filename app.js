@@ -55,7 +55,8 @@ const autoParseLibraryBtn = document.getElementById("autoParseLibraryBtn");
 const autoParseFirst20Btn = document.getElementById("autoParseFirst20Btn");
 const importVideoDataInput = document.getElementById("importVideoDataInput");
 const youtubeApiKeyInput = document.getElementById("youtubeApiKeyInput");
-const channelScopeInput = document.getElementById("channelScopeInput");
+const folderParseTools = document.getElementById("folderParseTools");
+const folderParseTitle = document.getElementById("folderParseTitle");
 const channelUrlInput = document.getElementById("channelUrlInput");
 const importHtmlBtn = document.getElementById("importHtmlBtn");
 const importHtmlInput = document.getElementById("importHtmlInput");
@@ -76,8 +77,7 @@ const VIDEO_STORE = "videos";
 const FOLDER_STORE = "folders";
 const PAGE_SIZE = 40;
 const TIME_PATTERN = /\b(\d{1,2}:\d{2}(?::\d{2})?)\b/g;
-const CHANNEL_URL_STORAGE_KEY = "mytube-channel-url";
-const CHANNEL_SCOPE_STORAGE_KEY = "mytube-channel-scope";
+const FOLDER_CHANNEL_MAP_STORAGE_KEY = "mytube-folder-channel-map";
 const YOUTUBE_API_KEY_STORAGE_KEY = "mytube-youtube-api-key";
 const DEFAULT_YOUTUBE_API_KEY = "AIzaSyCCXpvZAFDTm-pfCr2zYWj5LtVbjYzNqZo";
 const YOUTUBE_IMPORT_MAX_COMMENTS = 50;
@@ -329,33 +329,34 @@ const parseCompactNumber = (value) => {
   return Math.round(number);
 };
 
-const getChannelUrlValue = () => {
-  const fromInput = channelUrlInput?.value?.trim();
-  if (fromInput) return fromInput;
-  return localStorage.getItem(CHANNEL_URL_STORAGE_KEY) || "";
-};
-
-const saveChannelUrlValue = (value) => {
-  if (!value) {
-    localStorage.removeItem(CHANNEL_URL_STORAGE_KEY);
-    return;
+const getFolderChannelMap = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(FOLDER_CHANNEL_MAP_STORAGE_KEY) || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (_error) {
+    return {};
   }
-  localStorage.setItem(CHANNEL_URL_STORAGE_KEY, value);
 };
 
-
-const getChannelScopeValue = () => {
-  const fromInput = channelScopeInput?.value?.trim();
-  if (fromInput) return fromInput;
-  return localStorage.getItem(CHANNEL_SCOPE_STORAGE_KEY) || "";
+const saveFolderChannelMap = (map) => {
+  localStorage.setItem(FOLDER_CHANNEL_MAP_STORAGE_KEY, JSON.stringify(map || {}));
 };
 
-const saveChannelScopeValue = (value) => {
+const getActiveFolderChannelUrl = () => {
+  if (!state.activeFolder) return "";
+  const map = getFolderChannelMap();
+  return map[state.activeFolder] || "";
+};
+
+const saveActiveFolderChannelUrl = (value) => {
+  if (!state.activeFolder) return;
+  const map = getFolderChannelMap();
   if (!value) {
-    localStorage.removeItem(CHANNEL_SCOPE_STORAGE_KEY);
-    return;
+    delete map[state.activeFolder];
+  } else {
+    map[state.activeFolder] = value;
   }
-  localStorage.setItem(CHANNEL_SCOPE_STORAGE_KEY, value);
+  saveFolderChannelMap(map);
 };
 
 const getYouTubeApiKey = () => {
@@ -687,14 +688,14 @@ const shouldAutoparseVideo = (video) => {
 };
 
 const runAutoParse = async ({ limit = null, forceTopCandidates = false } = {}) => {
-  const channelScope = getChannelScopeValue().toLowerCase();
+  if (!state.activeFolder) {
+    alert("Сначала выберите нужную папку/канал в библиотеке.");
+    return;
+  }
+
   const allTargets = state.videos
-    .filter((video) => shouldAutoparseVideo(video))
-    .filter((video) => {
-      if (!channelScope) return true;
-      const haystack = `${video.channelName || ""} ${video.folderName || ""}`.toLowerCase();
-      return haystack.includes(channelScope);
-    });
+    .filter((video) => video.folderName === state.activeFolder)
+    .filter((video) => shouldAutoparseVideo(video));
   const targets = Number.isFinite(limit) ? allTargets.slice(0, limit) : allTargets;
 
   if (!targets.length) {
@@ -717,10 +718,10 @@ const runAutoParse = async ({ limit = null, forceTopCandidates = false } = {}) =
   }
 
   const estimatedUnits = uniqueQueries.length * 100;
-  const proceed = confirm(`Найдено ${targets.length} видео для автопарсинга${channelScope ? ` (фильтр: ${channelScope})` : ""}. Будет выполнено ${uniqueQueries.length} поисковых запросов (примерно ${estimatedUnits} quota units). Продолжить?`);
+  const proceed = confirm(`Папка: ${state.activeFolder}. Найдено ${targets.length} видео для автопарсинга. Будет выполнено ${uniqueQueries.length} поисковых запросов (примерно ${estimatedUnits} quota units). Продолжить?`);
   if (!proceed) return;
 
-  const selectedChannelUrl = getChannelUrlValue();
+  const selectedChannelUrl = getActiveFolderChannelUrl();
   let selectedChannelId = "";
   if (selectedChannelUrl) {
     try {
@@ -1311,6 +1312,21 @@ const renderVideos = ({ reset = false } = {}) => {
     videoGrid.appendChild(buildVideoCard(video));
   });
   state.renderedCount = targetCount;
+  renderFolderParseTools();
+};
+
+
+const renderFolderParseTools = () => {
+  if (!folderParseTools || !channelUrlInput || !folderParseTitle) return;
+  const isVisible = Boolean(state.activeFolder);
+  folderParseTools.classList.toggle("hidden", !isVisible);
+  if (!isVisible) {
+    folderParseTitle.textContent = "";
+    channelUrlInput.value = "";
+    return;
+  }
+  folderParseTitle.textContent = `Парсинг только для папки: ${state.activeFolder}`;
+  channelUrlInput.value = getActiveFolderChannelUrl();
 };
 
 const updateWatchedIndicator = (videoId, watched) => {
@@ -2152,17 +2168,9 @@ if (youtubeApiKeyInput) {
   });
 }
 
-if (channelScopeInput) {
-  channelScopeInput.value = getChannelScopeValue();
-  channelScopeInput.addEventListener("change", () => {
-    saveChannelScopeValue(channelScopeInput.value.trim());
-  });
-}
-
 if (channelUrlInput) {
-  channelUrlInput.value = getChannelUrlValue();
   channelUrlInput.addEventListener("change", () => {
-    saveChannelUrlValue(channelUrlInput.value.trim());
+    saveActiveFolderChannelUrl(channelUrlInput.value.trim());
   });
 }
 

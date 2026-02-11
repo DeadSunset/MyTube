@@ -66,6 +66,14 @@
                 </label>
               </div>
             </div>
+            <div id="folderParseTools" class="folder-parse-tools hidden">
+              <span id="folderParseTitle" class="muted"></span>
+              <input id="channelUrlInput" type="url" placeholder="URL YouTube-канала для текущей папки" />
+              <div class="folder-parse-actions">
+                <button id="autoParseFirst20Btn" class="btn">Обновить первые 20 из папки</button>
+                <button id="autoParseLibraryBtn" class="btn">Автопарсить текущую папку</button>
+              </div>
+            </div>
             <div id="videoGrid" class="video-grid"></div>
           </div>
 
@@ -164,18 +172,12 @@
               </div>
               <div class="profile-actions profile-import-actions">
                 <button id="exportPendingListBtn" class="btn">Экспортировать список видео без превью/комментов</button>
-                <button id="autoParseLibraryBtn" class="btn">Автопарсить всю библиотеку</button>
-                <button id="autoParseFirst20Btn" class="btn">Обновить первые 20 из списка</button>
-                <label class="btn" for="importVideoDataInput">Импортировать данные</label>
+                                <label class="btn" for="importVideoDataInput">Импортировать данные</label>
                 <input id="importVideoDataInput" type="file" accept="application/json" hidden />
               </div>
               <div class="profile-api-config">
                 <label for="youtubeApiKeyInput" class="muted">YouTube API Key (обязательно, ключ именно для YouTube Data API v3)</label>
                 <input id="youtubeApiKeyInput" type="password" placeholder="AIza..." />
-                <label for="channelScopeInput" class="muted">Канал в библиотеке (фильтр по вашему имени канала/папки)</label>
-                <input id="channelScopeInput" type="text" placeholder="Например: Utopia Show" />
-                <label for="channelUrlInput" class="muted">URL этого канала на YouTube (опционально, для точного совпадения)</label>
-                <input id="channelUrlInput" type="url" placeholder="https://www.youtube.com/@channel_name или /channel/UC..." />
               </div>
             </div>
           </div>
