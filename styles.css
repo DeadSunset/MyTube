@@ -401,9 +401,9 @@ body {
 }
 
 .video-info {
-  padding: 12px;
+  padding: 12px 14px 14px;
   display: grid;
-  gap: 6px;
+  gap: 8px;
 }
 
 .video-info .title {
@@ -453,9 +453,9 @@ video {
 
 .video-stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 8px;
-  font-size: 13px;
+  font-size: 1.35rem;
 }
 
 .comment-list {
