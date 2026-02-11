@@ -11,12 +11,12 @@
       <header class="topbar">
         <a class="logo" id="logoLink" href="index.html">MyTube</a>
         <div class="search">
-          <input id="searchInput" type="search" placeholder="Поиск" />
+          <input id="searchInput" type="search" placeholder="Поиск видео..." />
         </div>
-        <button id="addFolderBtn" class="btn">Добавить папку</button>
+        <button id="addFolderBtn" class="btn">Добавить общую папку</button>
         <input id="folderInput" type="file" webkitdirectory multiple hidden />
-        <button id="editLibraryBtn" class="btn">Редактировать</button>
-        <button id="profileBtn" class="btn">Профиль</button>
+        <button id="editLibraryBtn" class="btn">Добавить Канал</button>
+        <button id="profileBtn" class="btn profile-btn" aria-label="Профиль">👤</button>
       </header>
 
       <main class="main">
@@ -95,10 +95,10 @@
                   <h3>Импорт метаданных и превью</h3>
                   <p class="muted">Работает через YouTube API Key. Загружаются просмотры, лайки, до 50 комментариев и до 10 ответов к каждому (если доступны).</p>
                   <div class="import-actions">
-                    <button id="importHtmlBtn" class="btn">Импортировать HTML</button>
+                    <button id="importHtmlBtn" class="btn">Общий парсинг HTML</button>
                     <input id="importHtmlInput" type="file" accept=".html,text/html" hidden />
                     <input id="importUrlInput" type="url" placeholder="https://www.youtube.com/watch?v=..." />
-                    <button id="importUrlBtn" class="btn">Импорт по URL</button>
+                    <button id="importUrlBtn" class="btn">Общий парсинг URL</button>
                   </div>
                   <div class="video-stats-grid">
                     <span><b>Просмотры:</b> <span id="watchViews">—</span></span>
@@ -163,7 +163,7 @@
 
           <div id="profileView" class="view">
             <div class="profile-panel">
-              <h2>Личный кабинет</h2>
+              <h2>Профиль</h2>
               <p class="muted">Сохраните бекап библиотеки или восстановите его позже.</p>
               <div class="profile-actions">
                 <button id="exportBackupBtn" class="btn">Создать бекап</button>

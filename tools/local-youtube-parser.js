@@ -15,7 +15,7 @@ const https = require("node:https");
 const { URL } = require("node:url");
 
 const PORT = Number.parseInt(process.env.MYTUBE_PARSER_PORT || "8787", 10);
-const HOST = process.env.MYTUBE_PARSER_HOST || "127.0.0.1";
+const HOST = process.env.MYTUBE_PARSER_HOST || "0.0.0.0";
 const DEFAULT_YOUTUBE_API_KEY = "AIzaSyCCXpvZAFDTm-pfCr2zYWj5LtVbjYzNqZo";
 const YOUTUBE_API_KEY = process.env.MYTUBE_YOUTUBE_API_KEY || DEFAULT_YOUTUBE_API_KEY;
 const MAX_COMMENTS = 50;
@@ -140,17 +140,60 @@ const readTextLike = (node) => {
 };
 
 const parseCompactNumber = (value) => {
-  if (!value) return null;
-  const normalized = `${value}`.replace(/\s+/g, " ").trim().toLowerCase();
-  const number = Number.parseFloat(
-    normalized.replace(/[^\d.,]/g, "").replace(",", ".")
-  );
+  if (!value && value !== 0) return null;
+  const normalized = `${value}`
+    .replace(/\u00A0|\u202F/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 
+  let numberPart = normalized.replace(/[^\d.,]/g, "");
+  if (!numberPart) return null;
+
+  const hasComma = numberPart.includes(",");
+  const hasDot = numberPart.includes(".");
+  if (hasComma && hasDot) {
+    numberPart = numberPart.replace(/,/g, "");
+  } else if (hasComma) {
+    numberPart = numberPart.replace(",", ".");
+  }
+
+  const number = Number.parseFloat(numberPart);
   if (!Number.isFinite(number)) return null;
-  if (normalized.includes("тыс") || normalized.includes("k")) return Math.round(number * 1_000);
-  if (normalized.includes("млн") || normalized.includes("m")) return Math.round(number * 1_000_000);
-  if (normalized.includes("млрд") || normalized.includes("b")) return Math.round(number * 1_000_000_000);
+  if (/(?:тыс|k)(?:\b|\.)/.test(normalized)) return Math.round(number * 1_000);
+  if (/(?:млн|m)(?:\b|\.)/.test(normalized)) return Math.round(number * 1_000_000);
+  if (/(?:млрд|b)(?:\b|\.)/.test(normalized)) return Math.round(number * 1_000_000_000);
   return Math.round(number);
+};
+
+
+const parseLikeCountFromInitialData = (initialData) => {
+  if (!initialData || typeof initialData !== "object") return null;
+  const stack = [initialData];
+
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node || typeof node !== "object") continue;
+    if (Array.isArray(node)) {
+      stack.push(...node);
+      continue;
+    }
+
+    if (node.toggleButtonRenderer?.defaultText) {
+      const label =
+        readTextLike(node.toggleButtonRenderer.defaultText) ||
+        node.toggleButtonRenderer?.defaultText?.accessibility?.accessibilityData?.label ||
+        "";
+      const parsed = parseCompactNumber(label);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+
+    Object.values(node).forEach((value) => {
+      if (value && typeof value === "object") stack.push(value);
+    });
+  }
+
+  return null;
 };
 
 const collectCommentThreads = (node, bucket = []) => {
@@ -338,6 +381,7 @@ const parseWatchPayload = (html, sourceUrl) => {
   const views =
     parseCompactNumber(details.viewCount) ||
     parseCompactNumber(playerData?.microformat?.playerMicroformatRenderer?.viewCount);
+  const likes = parseLikeCountFromInitialData(initialData);
 
   return {
     sourceUrl,
@@ -347,7 +391,7 @@ const parseWatchPayload = (html, sourceUrl) => {
     thumbnail: details.thumbnail?.thumbnails?.at?.(-1)?.url || "",
     stats: {
       views,
-      likes: null,
+      likes,
       dislikes: null,
       comments: comments.length,
     },
