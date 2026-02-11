@@ -170,7 +170,11 @@
                 <input id="importVideoDataInput" type="file" accept="application/json" hidden />
               </div>
               <div class="profile-api-config">
-                <label for="channelUrlInput" class="muted">URL канала для автопарсинга (опционально, повышает точность)</label>
+                <label for="youtubeApiKeyInput" class="muted">YouTube API Key (обязательно, ключ именно для YouTube Data API v3)</label>
+                <input id="youtubeApiKeyInput" type="password" placeholder="AIza..." />
+                <label for="channelScopeInput" class="muted">Канал в библиотеке (фильтр по вашему имени канала/папки)</label>
+                <input id="channelScopeInput" type="text" placeholder="Например: Utopia Show" />
+                <label for="channelUrlInput" class="muted">URL этого канала на YouTube (опционально, для точного совпадения)</label>
                 <input id="channelUrlInput" type="url" placeholder="https://www.youtube.com/@channel_name или /channel/UC..." />
               </div>
             </div>

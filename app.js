@@ -54,6 +54,8 @@ const exportPendingListBtn = document.getElementById("exportPendingListBtn");
 const autoParseLibraryBtn = document.getElementById("autoParseLibraryBtn");
 const autoParseFirst20Btn = document.getElementById("autoParseFirst20Btn");
 const importVideoDataInput = document.getElementById("importVideoDataInput");
+const youtubeApiKeyInput = document.getElementById("youtubeApiKeyInput");
+const channelScopeInput = document.getElementById("channelScopeInput");
 const channelUrlInput = document.getElementById("channelUrlInput");
 const importHtmlBtn = document.getElementById("importHtmlBtn");
 const importHtmlInput = document.getElementById("importHtmlInput");
@@ -75,6 +77,8 @@ const FOLDER_STORE = "folders";
 const PAGE_SIZE = 40;
 const TIME_PATTERN = /\b(\d{1,2}:\d{2}(?::\d{2})?)\b/g;
 const CHANNEL_URL_STORAGE_KEY = "mytube-channel-url";
+const CHANNEL_SCOPE_STORAGE_KEY = "mytube-channel-scope";
+const YOUTUBE_API_KEY_STORAGE_KEY = "mytube-youtube-api-key";
 const DEFAULT_YOUTUBE_API_KEY = "AIzaSyCCXpvZAFDTm-pfCr2zYWj5LtVbjYzNqZo";
 const YOUTUBE_IMPORT_MAX_COMMENTS = 50;
 const YOUTUBE_IMPORT_MAX_REPLIES = 10;
@@ -339,6 +343,43 @@ const saveChannelUrlValue = (value) => {
   localStorage.setItem(CHANNEL_URL_STORAGE_KEY, value);
 };
 
+
+const getChannelScopeValue = () => {
+  const fromInput = channelScopeInput?.value?.trim();
+  if (fromInput) return fromInput;
+  return localStorage.getItem(CHANNEL_SCOPE_STORAGE_KEY) || "";
+};
+
+const saveChannelScopeValue = (value) => {
+  if (!value) {
+    localStorage.removeItem(CHANNEL_SCOPE_STORAGE_KEY);
+    return;
+  }
+  localStorage.setItem(CHANNEL_SCOPE_STORAGE_KEY, value);
+};
+
+const getYouTubeApiKey = () => {
+  const fromInput = youtubeApiKeyInput?.value?.trim();
+  if (fromInput) return fromInput;
+  return localStorage.getItem(YOUTUBE_API_KEY_STORAGE_KEY) || DEFAULT_YOUTUBE_API_KEY;
+};
+
+const saveYouTubeApiKey = (value) => {
+  if (!value) {
+    localStorage.removeItem(YOUTUBE_API_KEY_STORAGE_KEY);
+    return;
+  }
+  localStorage.setItem(YOUTUBE_API_KEY_STORAGE_KEY, value);
+};
+
+const ensureYouTubeApiKey = () => {
+  const key = getYouTubeApiKey();
+  if (!key) {
+    throw new Error("YouTube API key is missing");
+  }
+  return key;
+};
+
 const isVideoMissingMeta = (video) => {
   const hasThumbnail = Boolean(video.thumbnail);
   const hasComments = Array.isArray(video.comments) && video.comments.length > 0;
@@ -455,7 +496,7 @@ const fetchYouTubeApiPayload = async (inputUrl, videoId) => {
   const videoApiUrl = new URL("https://www.googleapis.com/youtube/v3/videos");
   videoApiUrl.searchParams.set("part", "snippet,statistics");
   videoApiUrl.searchParams.set("id", videoId);
-  videoApiUrl.searchParams.set("key", DEFAULT_YOUTUBE_API_KEY);
+  videoApiUrl.searchParams.set("key", ensureYouTubeApiKey());
 
   const commentsApiUrl = new URL("https://www.googleapis.com/youtube/v3/commentThreads");
   commentsApiUrl.searchParams.set("part", "snippet,replies");
@@ -463,7 +504,7 @@ const fetchYouTubeApiPayload = async (inputUrl, videoId) => {
   commentsApiUrl.searchParams.set("maxResults", `${YOUTUBE_IMPORT_MAX_COMMENTS}`);
   commentsApiUrl.searchParams.set("order", "relevance");
   commentsApiUrl.searchParams.set("textFormat", "plainText");
-  commentsApiUrl.searchParams.set("key", DEFAULT_YOUTUBE_API_KEY);
+  commentsApiUrl.searchParams.set("key", ensureYouTubeApiKey());
 
   const [videoResponse, commentsResponse] = await Promise.all([
     fetch(videoApiUrl.toString()),
@@ -599,7 +640,7 @@ const resolveChannelId = async (channelValue = "") => {
   searchUrl.searchParams.set("type", "channel");
   searchUrl.searchParams.set("maxResults", "1");
   searchUrl.searchParams.set("q", handle);
-  searchUrl.searchParams.set("key", DEFAULT_YOUTUBE_API_KEY);
+  searchUrl.searchParams.set("key", ensureYouTubeApiKey());
 
   const data = await fetchJsonWithRetry(searchUrl.toString(), 1);
   return data?.items?.[0]?.snippet?.channelId || "";
@@ -617,7 +658,7 @@ const searchYouTubeCandidates = async (query, options = {}) => {
   if (options.channelId) {
     url.searchParams.set("channelId", options.channelId);
   }
-  url.searchParams.set("key", DEFAULT_YOUTUBE_API_KEY);
+  url.searchParams.set("key", ensureYouTubeApiKey());
 
   const data = await fetchJsonWithRetry(url.toString(), 1);
   const items = Array.isArray(data?.items) ? data.items : [];
@@ -646,7 +687,14 @@ const shouldAutoparseVideo = (video) => {
 };
 
 const runAutoParse = async ({ limit = null, forceTopCandidates = false } = {}) => {
-  const allTargets = state.videos.filter((video) => shouldAutoparseVideo(video));
+  const channelScope = getChannelScopeValue().toLowerCase();
+  const allTargets = state.videos
+    .filter((video) => shouldAutoparseVideo(video))
+    .filter((video) => {
+      if (!channelScope) return true;
+      const haystack = `${video.channelName || ""} ${video.folderName || ""}`.toLowerCase();
+      return haystack.includes(channelScope);
+    });
   const targets = Number.isFinite(limit) ? allTargets.slice(0, limit) : allTargets;
 
   if (!targets.length) {
@@ -669,7 +717,7 @@ const runAutoParse = async ({ limit = null, forceTopCandidates = false } = {}) =
   }
 
   const estimatedUnits = uniqueQueries.length * 100;
-  const proceed = confirm(`Найдено ${targets.length} видео для автопарсинга. Будет выполнено ${uniqueQueries.length} поисковых запросов (примерно ${estimatedUnits} quota units). Продолжить?`);
+  const proceed = confirm(`Найдено ${targets.length} видео для автопарсинга${channelScope ? ` (фильтр: ${channelScope})` : ""}. Будет выполнено ${uniqueQueries.length} поисковых запросов (примерно ${estimatedUnits} quota units). Продолжить?`);
   if (!proceed) return;
 
   const selectedChannelUrl = getChannelUrlValue();
@@ -1848,7 +1896,7 @@ const importMetaFromUrl = async (inputUrl, options = {}) => {
 
   if (!hasMeaningfulYoutubeImport(payload)) {
     if (showAlert) {
-      alert("Не удалось загрузить просмотры/лайки/комментарии по URL. Проверьте корректность API key и ограничения в Google Cloud (HTTP referrer / quota).");
+      alert("Не удалось загрузить просмотры/лайки/комментарии по URL. Если видите 403, проверьте что используете API KEY (не OAuth client), включен YouTube Data API v3 и настроены ограничения referrer/quota.");
     }
     return false;
   }
@@ -2094,6 +2142,20 @@ if (importVideoDataInput) {
       console.error(error);
       alert("Не удалось импортировать данные из файла.");
     }
+  });
+}
+
+if (youtubeApiKeyInput) {
+  youtubeApiKeyInput.value = getYouTubeApiKey();
+  youtubeApiKeyInput.addEventListener("change", () => {
+    saveYouTubeApiKey(youtubeApiKeyInput.value.trim());
+  });
+}
+
+if (channelScopeInput) {
+  channelScopeInput.value = getChannelScopeValue();
+  channelScopeInput.addEventListener("change", () => {
+    saveChannelScopeValue(channelScopeInput.value.trim());
   });
 }
 

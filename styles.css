@@ -257,7 +257,9 @@ body {
   gap: 8px;
 }
 
-#channelUrlInput {
+#channelUrlInput,
+#channelScopeInput,
+#youtubeApiKeyInput {
   width: 100%;
   background: #121212;
   border: 1px solid #303030;
