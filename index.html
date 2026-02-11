@@ -11,12 +11,12 @@
       <header class="topbar">
         <a class="logo" id="logoLink" href="index.html">MyTube</a>
         <div class="search">
-          <input id="searchInput" type="search" placeholder="Поиск" />
+          <input id="searchInput" type="search" placeholder="Поиск видео..." />
         </div>
-        <button id="addFolderBtn" class="btn">Добавить папку</button>
+        <button id="addFolderBtn" class="btn">Добавить общую папку</button>
         <input id="folderInput" type="file" webkitdirectory multiple hidden />
-        <button id="editLibraryBtn" class="btn">Редактировать</button>
-        <button id="profileBtn" class="btn">Профиль</button>
+        <button id="editLibraryBtn" class="btn">Добавить Канал</button>
+        <button id="profileBtn" class="btn profile-btn" aria-label="Профиль">👤</button>
       </header>
 
       <main class="main">
@@ -95,10 +95,12 @@
                   <h3>Импорт метаданных и превью</h3>
                   <p class="muted">Работает через YouTube API Key. Загружаются просмотры, лайки, до 50 комментариев и до 10 ответов к каждому (если доступны).</p>
                   <div class="import-actions">
-                    <button id="importHtmlBtn" class="btn">Импортировать HTML</button>
+                    <button id="importHtmlBtn" class="btn">Общий парсинг HTML</button>
                     <input id="importHtmlInput" type="file" accept=".html,text/html" hidden />
+                    <button id="importPdfBtn" class="btn">Парсинг из PDF</button>
+                    <input id="importPdfInput" type="file" accept="application/pdf,.pdf" hidden />
                     <input id="importUrlInput" type="url" placeholder="https://www.youtube.com/watch?v=..." />
-                    <button id="importUrlBtn" class="btn">Импорт по URL</button>
+                    <button id="importUrlBtn" class="btn">Общий парсинг URL</button>
                   </div>
                   <div class="video-stats-grid">
                     <span><b>Просмотры:</b> <span id="watchViews">—</span></span>
@@ -163,7 +165,7 @@
 
           <div id="profileView" class="view">
             <div class="profile-panel">
-              <h2>Личный кабинет</h2>
+              <h2>Профиль</h2>
               <p class="muted">Сохраните бекап библиотеки или восстановите его позже.</p>
               <div class="profile-actions">
                 <button id="exportBackupBtn" class="btn">Создать бекап</button>
@@ -176,10 +178,38 @@
                 <input id="importVideoDataInput" type="file" accept="application/json" hidden />
                 <button id="autoAddTreeBtn" class="btn">Автодобавить папку (каналы/плейлисты)</button>
                 <input id="autoAddTreeInput" type="file" webkitdirectory multiple hidden />
+                <button id="openUrlFillerBtn" class="btn">Заполнятель URL</button>
               </div>
               <div class="profile-api-config">
                 <label for="youtubeApiKeyInput" class="muted">YouTube API Key (обязательно, ключ именно для YouTube Data API v3)</label>
                 <input id="youtubeApiKeyInput" type="password" placeholder="AIza..." />
+              </div>
+            </div>
+          </div>
+
+          <div id="urlFillerView" class="view">
+            <div class="url-filler-panel">
+              <div class="url-filler-head">
+                <h2>Заполнятель URL</h2>
+                <button id="urlFillerBackBtn" class="btn">Назад в профиль</button>
+              </div>
+              <p class="muted">Видео файл не показывается. Вставьте URL или загрузите HTML для текущего видео из общего каталога.</p>
+
+              <div class="url-filler-card">
+                <p class="muted" id="urlFillerProgress">—</p>
+                <h3 id="urlFillerVideoTitle">—</h3>
+                <p id="urlFillerChannelName" class="muted">—</p>
+              </div>
+
+              <div class="url-filler-actions">
+                <input id="urlFillerUrlInput" type="url" placeholder="https://www.youtube.com/watch?v=..." />
+                <button id="urlFillerImportUrlBtn" class="btn">Обработать URL</button>
+              </div>
+
+              <div class="url-filler-actions">
+                <button id="urlFillerImportHtmlBtn" class="btn">Обработать HTML</button>
+                <input id="urlFillerHtmlInput" type="file" accept=".html,text/html" hidden />
+                <button id="urlFillerSkipBtn" class="btn">Пропустить</button>
               </div>
             </div>
           </div>
