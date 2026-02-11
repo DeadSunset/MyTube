@@ -1181,46 +1181,96 @@ const decodePdfString = (value = "") => value
   .replace(/\\\\/g, "\\")
   .replace(/\\([0-7]{1,3})/g, (_m, oct) => String.fromCharCode(Number.parseInt(oct, 8)));
 
+const extractPdfTextOperators = (chunk = "") => {
+  const parts = [];
+
+  const tjRegex = /\[((?:.|\n|\r)*?)\]\s*TJ/g;
+  let tjMatch;
+  while ((tjMatch = tjRegex.exec(chunk))) {
+    const segment = tjMatch[1] || "";
+    const tokens = segment.match(/\((?:\\.|[^\\)])*\)/g) || [];
+    tokens.forEach((token) => {
+      const value = token.slice(1, -1);
+      const decoded = decodePdfString(value);
+      if (decoded.trim()) parts.push(decoded);
+    });
+  }
+
+  const tRegex = /\((?:\\.|[^\\)])*\)\s*Tj/g;
+  let tMatch;
+  while ((tMatch = tRegex.exec(chunk))) {
+    const token = tMatch[0].replace(/\)\s*Tj$/, "").replace(/^\(/, "");
+    const decoded = decodePdfString(token);
+    if (decoded.trim()) parts.push(decoded);
+  }
+
+  return parts
+    .join("\n")
+    .replace(/[\u0000-\u001F]+/g, " ")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+};
+
+const inflatePdfStream = async (streamBytes) => {
+  if (!streamBytes?.length || typeof DecompressionStream === "undefined") return "";
+  try {
+    const ds = new DecompressionStream("deflate");
+    const writer = ds.writable.getWriter();
+    await writer.write(streamBytes);
+    await writer.close();
+    const decompressedBuffer = await new Response(ds.readable).arrayBuffer();
+    return new TextDecoder("latin1").decode(new Uint8Array(decompressedBuffer));
+  } catch (_error) {
+    return "";
+  }
+};
+
 const extractPdfTextPages = async (file) => {
   const buffer = await file.arrayBuffer();
   const bytes = new Uint8Array(buffer);
-  const raw = Array.from(bytes, (byte) => String.fromCharCode(byte)).join("");
+  const raw = new TextDecoder("latin1").decode(bytes);
 
   const pageChunks = raw.split(/\b\/Type\s*\/Page\b/g);
   const pages = pageChunks.length > 1 ? pageChunks.slice(1) : [raw];
 
-  const decodedPages = pages.map((chunk, index) => {
-    const parts = [];
+  const decodedPages = [];
 
-    const tjRegex = /\[((?:.|\n|\r)*?)\]\s*TJ/g;
-    let tjMatch;
-    while ((tjMatch = tjRegex.exec(chunk))) {
-      const segment = tjMatch[1] || "";
-      const tokens = segment.match(/\((?:\\.|[^\\)])*\)/g) || [];
-      tokens.forEach((token) => {
-        const value = token.slice(1, -1);
-        const decoded = decodePdfString(value);
-        if (decoded.trim()) parts.push(decoded);
-      });
+  for (let index = 0; index < pages.length; index += 1) {
+    const chunk = pages[index];
+    let text = extractPdfTextOperators(chunk);
+
+    if (!text) {
+      // Fallback for compressed content streams (/FlateDecode).
+      const streamRegex = /<<(?:.|\n|\r)*?\/FlateDecode(?:.|\n|\r)*?>>\s*stream\r?\n([\s\S]*?)\r?\nendstream/g;
+      let match;
+      const extractedFromStreams = [];
+      while ((match = streamRegex.exec(chunk))) {
+        const binaryStream = match[1] || "";
+        const streamBytes = new Uint8Array(binaryStream.length);
+        for (let i = 0; i < binaryStream.length; i += 1) {
+          streamBytes[i] = binaryStream.charCodeAt(i) & 0xff;
+        }
+        // eslint-disable-next-line no-await-in-loop
+        const inflated = await inflatePdfStream(streamBytes);
+        if (!inflated) continue;
+        const inflatedText = extractPdfTextOperators(inflated);
+        if (inflatedText) extractedFromStreams.push(inflatedText);
+      }
+      text = extractedFromStreams.join("\n").trim();
     }
 
-    const tRegex = /\((?:\\.|[^\\)])*\)\s*Tj/g;
-    let tMatch;
-    while ((tMatch = tRegex.exec(chunk))) {
-      const token = tMatch[0].replace(/\)\s*Tj$/, "").replace(/^\(/, "");
-      const decoded = decodePdfString(token);
-      if (decoded.trim()) parts.push(decoded);
+    if (!text) {
+      // Last fallback: keep visible URL-ish and handle-like text from raw bytes.
+      const urlHits = chunk.match(/https?:\/\/[^\s<>()"']+/g) || [];
+      const handleHits = chunk.match(/@[\w.\-]{3,}/g) || [];
+      text = [...urlHits, ...handleHits].join("\n").trim();
     }
 
-    const text = parts
-      .join("\n")
-      .replace(/[\u0000-\u001F]+/g, " ")
-      .replace(/[ \t]{2,}/g, " ")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
-
-    return { page: index + 1, text };
-  });
+    if (text) {
+      decodedPages.push({ page: index + 1, text });
+    }
+  }
 
   return decodedPages.filter((item) => item.text);
 };
@@ -1326,6 +1376,7 @@ const parseYoutubePdfPayload = async (file) => {
 
   const viewsMatch = wholeText.match(/([\d\s.,]+(?:тыс\.?|млн\.?|млрд\.?|k|m|b)?)\s*(просмотр|views)/i);
   const likesMatch = wholeText.match(/([\d\s.,]+(?:тыс\.?|млн\.?|млрд\.?|k|m|b)?)\s*(лайк|likes?)/i);
+  const sourceUrlMatch = wholeText.match(/https?:\/\/(?:www\.)?(?:youtube\.com\/watch\?v=[\w-]{11}|youtu\.be\/[\w-]{11})/i);
   const titleGuess = (lines.find((item) => item.line.length > 8 && !/(youtube|комментар|views|просмотр)/i.test(item.line)) || {}).line || "";
 
   const commentsExtracted = comments.length;
@@ -1337,6 +1388,7 @@ const parseYoutubePdfPayload = async (file) => {
   return {
     title: titleGuess,
     channelName: "",
+    sourceUrl: sourceUrlMatch ? sourceUrlMatch[0] : "",
     stats: {
       views: viewsMatch ? normalizePdfNumber(viewsMatch[1]) : null,
       likes: likesMatch ? normalizePdfNumber(likesMatch[1]) : null,
@@ -2468,9 +2520,26 @@ const importMetaFromPdfFile = async (file, options = {}) => {
   if (!video || !file) return false;
 
   const payload = await parseYoutubePdfPayload(file);
+  if (payload?.sourceUrl) {
+    try {
+      const byUrl = await importMetaFromUrl(payload.sourceUrl, {
+        targetVideoId,
+        showAlert: false,
+      });
+      if (byUrl) {
+        if (showAlert) {
+          alert("PDF найден URL YouTube. Данные успешно подтянуты по URL/API.");
+        }
+        return true;
+      }
+    } catch (error) {
+      console.warn("Не удалось выполнить fallback импорт по URL из PDF", error);
+    }
+  }
+
   if (!payload || (!payload.title && !(payload.comments || []).length)) {
     if (showAlert) {
-      alert("Не удалось извлечь данные из PDF. Попробуйте другой экспорт PDF.");
+      alert("Не удалось извлечь данные из PDF. Вероятно это скан/изображение или сжатый экспорт без текстового слоя. Попробуйте PDF с текстовым слоем или вставьте URL вручную.");
     }
     return false;
   }
