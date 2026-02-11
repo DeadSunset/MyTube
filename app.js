@@ -51,6 +51,8 @@ const profileBtn = document.getElementById("profileBtn");
 const exportBackupBtn = document.getElementById("exportBackupBtn");
 const importBackupInput = document.getElementById("importBackupInput");
 const exportPendingListBtn = document.getElementById("exportPendingListBtn");
+const autoParseLibraryBtn = document.getElementById("autoParseLibraryBtn");
+const autoParseFirst20Btn = document.getElementById("autoParseFirst20Btn");
 const importVideoDataInput = document.getElementById("importVideoDataInput");
 const localParserApiInput = document.getElementById("localParserApiInput");
 const importHtmlBtn = document.getElementById("importHtmlBtn");
@@ -73,6 +75,14 @@ const FOLDER_STORE = "folders";
 const PAGE_SIZE = 40;
 const TIME_PATTERN = /\b(\d{1,2}:\d{2}(?::\d{2})?)\b/g;
 const PARSER_API_STORAGE_KEY = "mytube-parser-api-url";
+const DEFAULT_PARSER_API_URL = "http://127.0.0.1:8787/youtube";
+const DEFAULT_YOUTUBE_API_KEY = "AIzaSyCCXpvZAFDTm-pfCr2zYWj5LtVbjYzNqZo";
+const YOUTUBE_IMPORT_MAX_COMMENTS = 50;
+const YOUTUBE_IMPORT_MAX_REPLIES = 10;
+const YOUTUBE_SEARCH_MAX_RESULTS = 8;
+const YOUTUBE_MATCH_HIGH_CONFIDENCE = 90;
+const YOUTUBE_MATCH_LOW_CONFIDENCE = 80;
+const YOUTUBE_MATCH_MIN_FOR_TRY = 55;
 
 let state = {
   videos: [],
@@ -315,7 +325,7 @@ const parseCompactNumber = (value) => {
 const getParserApiUrl = () => {
   const fromInput = localParserApiInput?.value?.trim();
   if (fromInput) return fromInput;
-  return localStorage.getItem(PARSER_API_STORAGE_KEY) || "";
+  return localStorage.getItem(PARSER_API_STORAGE_KEY) || DEFAULT_PARSER_API_URL;
 };
 
 const saveParserApiUrl = (value) => {
@@ -329,23 +339,39 @@ const saveParserApiUrl = (value) => {
 const isVideoMissingMeta = (video) => {
   const hasThumbnail = Boolean(video.thumbnail);
   const hasComments = Array.isArray(video.comments) && video.comments.length > 0;
-  const imported = video.imported;
-  const hasImportedStats = Boolean(
-    imported?.stats &&
-    (imported.stats.views !== null || imported.stats.likes !== null || imported.stats.dislikes !== null)
-  );
-  return !hasThumbnail && !hasComments && !hasImportedStats;
+  return !hasThumbnail || !hasComments;
 };
 
-const exportPendingVideoList = () => {
-  const pendingVideos = state.videos
-    .filter((video) => isVideoMissingMeta(video))
-    .map((video) => ({
-      id: video.id,
-      title: video.title,
-      folderName: video.folderName || "",
-      channelName: video.channelName || "",
-    }));
+const exportPendingVideoList = async () => {
+  const pendingVideos = [];
+  const total = state.videos.length;
+
+  updateImportStatus(0, total);
+  if (importLabel) {
+    importLabel.textContent = `Проверка видео: 0 / ${total}`;
+  }
+
+  for (let index = 0; index < total; index += 1) {
+    const video = state.videos[index];
+    if (isVideoMissingMeta(video)) {
+      pendingVideos.push({
+        id: video.id,
+        title: video.title,
+        folderName: video.folderName || "",
+        channelName: video.channelName || "",
+        hasThumbnail: Boolean(video.thumbnail),
+        commentsCount: Array.isArray(video.comments) ? video.comments.length : 0,
+      });
+    }
+
+    if ((index + 1) % 50 === 0 || index + 1 === total) {
+      updateImportStatus(index + 1, total);
+      if (importLabel) {
+        importLabel.textContent = `Проверка видео: ${index + 1} / ${total}`;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
 
   const blob = new Blob([JSON.stringify({ videos: pendingVideos }, null, 2)], {
     type: "application/json",
@@ -358,7 +384,8 @@ const exportPendingVideoList = () => {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
-  alert(`Экспортировано ${pendingVideos.length} видео без превью/комментариев.`);
+  resetImportStatus();
+  alert(`Экспортировано ${pendingVideos.length} видео без превью ИЛИ комментариев.`);
 };
 
 const buildCommentsFromApi = (comments = [], baseIndex = 0) => comments.map((comment, index) => {
@@ -385,6 +412,101 @@ const buildCommentsFromApi = (comments = [], baseIndex = 0) => comments.map((com
   }, comment.author || "YouTube user");
 });
 
+
+const buildCommentsFromYouTubeApi = (threads = []) => threads
+  .map((item, index) => {
+    const topLevel = item?.snippet?.topLevelComment?.snippet;
+    if (!topLevel?.textDisplay) return null;
+
+    const replyItems = Array.isArray(item?.replies?.comments)
+      ? item.replies.comments.slice(0, YOUTUBE_IMPORT_MAX_REPLIES)
+      : [];
+
+    const replies = replyItems
+      .map((reply, replyIndex) => {
+        const replySnippet = reply?.snippet;
+        if (!replySnippet?.textDisplay) return null;
+        return {
+          id: reply?.id || `reply-${index}-${replyIndex}`,
+          author: replySnippet.authorDisplayName || "YouTube user",
+          text: replySnippet.textDisplay,
+          createdAt: Date.now(),
+        };
+      })
+      .filter(Boolean);
+
+    return {
+      id: item?.snippet?.topLevelComment?.id || `comment-${index}`,
+      author: topLevel.authorDisplayName || "YouTube user",
+      text: topLevel.textDisplay,
+      likes: Number.parseInt(topLevel.likeCount || "0", 10) || 0,
+      dislikes: 0,
+      replyCount: Number.parseInt(item?.snippet?.totalReplyCount || "0", 10) || 0,
+      replies,
+      order: index,
+    };
+  })
+  .filter(Boolean);
+
+const fetchYouTubeApiPayload = async (inputUrl, videoId) => {
+  const videoApiUrl = new URL("https://www.googleapis.com/youtube/v3/videos");
+  videoApiUrl.searchParams.set("part", "snippet,statistics");
+  videoApiUrl.searchParams.set("id", videoId);
+  videoApiUrl.searchParams.set("key", DEFAULT_YOUTUBE_API_KEY);
+
+  const commentsApiUrl = new URL("https://www.googleapis.com/youtube/v3/commentThreads");
+  commentsApiUrl.searchParams.set("part", "snippet,replies");
+  commentsApiUrl.searchParams.set("videoId", videoId);
+  commentsApiUrl.searchParams.set("maxResults", `${YOUTUBE_IMPORT_MAX_COMMENTS}`);
+  commentsApiUrl.searchParams.set("order", "relevance");
+  commentsApiUrl.searchParams.set("textFormat", "plainText");
+  commentsApiUrl.searchParams.set("key", DEFAULT_YOUTUBE_API_KEY);
+
+  const [videoResponse, commentsResponse] = await Promise.all([
+    fetch(videoApiUrl.toString()),
+    fetch(commentsApiUrl.toString()),
+  ]);
+
+  if (!videoResponse.ok) {
+    throw new Error(`YouTube videos API error: ${videoResponse.status}`);
+  }
+  if (!commentsResponse.ok) {
+    throw new Error(`YouTube comments API error: ${commentsResponse.status}`);
+  }
+
+  const videoData = await videoResponse.json();
+  const commentsData = await commentsResponse.json();
+  const firstVideo = videoData?.items?.[0];
+  if (!firstVideo) {
+    throw new Error("Video not found in YouTube API response");
+  }
+
+  const comments = buildCommentsFromYouTubeApi(commentsData?.items || []);
+  return {
+    title: firstVideo?.snippet?.title || "",
+    channelName: firstVideo?.snippet?.channelTitle || "",
+    sourceVideoId: videoId,
+    thumbnail:
+      firstVideo?.snippet?.thumbnails?.maxres?.url ||
+      firstVideo?.snippet?.thumbnails?.high?.url ||
+      firstVideo?.snippet?.thumbnails?.medium?.url ||
+      firstVideo?.snippet?.thumbnails?.default?.url ||
+      `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    stats: {
+      views: Number.parseInt(firstVideo?.statistics?.viewCount || "0", 10) || 0,
+      likes: Number.parseInt(firstVideo?.statistics?.likeCount || "0", 10) || 0,
+      dislikes: null,
+      comments: comments.length,
+    },
+    comments: buildCommentsFromApi(comments),
+    importMeta: {
+      source: "youtube-browser-api",
+      sourceUrl: inputUrl,
+      commentsLimit: YOUTUBE_IMPORT_MAX_COMMENTS,
+    },
+  };
+};
+
 const fetchUrlImportPayload = async (inputUrl) => {
   const parserApiUrl = getParserApiUrl();
   if (!parserApiUrl) return null;
@@ -407,6 +529,309 @@ const fetchUrlImportPayload = async (inputUrl) => {
     comments: buildCommentsFromApi(Array.isArray(data.comments) ? data.comments : []),
   };
   return payload;
+};
+
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const normalizeTitleForSearch = (value = "") => {
+  const lower = `${value}`.toLowerCase().replace(/ё/g, "е");
+  const stripped = lower
+    .replace(/\.(mp4|webm|mkv|mov)$/gi, " ")
+    .replace(/\b(19|20)\d{2}\b/g, " ")
+    .replace(/\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b/g, " ")
+    .replace(/[\[\(][^\]\)]*(official|lyric|lyrics|audio|hd|4k|remaster|live|clip|teaser|trailer|full|официальн|клип|трейлер|ремастер|лайв|аудио)[^\]\)]*[\]\)]/gi, " ")
+    .replace(/[#!|•—–_]+/g, " ")
+    .replace(/[^\p{L}\p{N}\s-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return stripped;
+};
+
+const tokenSet = (text) => new Set(normalizeTitleForSearch(text).split(/\s+/).filter(Boolean));
+
+const scoreTitleMatch = (originalTitle, candidateTitle) => {
+  const a = tokenSet(originalTitle);
+  const b = tokenSet(candidateTitle);
+  if (!a.size || !b.size) return 0;
+
+  let intersection = 0;
+  for (const token of a) {
+    if (b.has(token)) intersection += 1;
+  }
+
+  const jaccard = intersection / (a.size + b.size - intersection || 1);
+  const containment = intersection / (a.size || 1);
+  return Math.round((jaccard * 0.6 + containment * 0.4) * 100);
+};
+
+const fetchJsonWithRetry = async (url, maxRetries = 3) => {
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    const response = await fetch(url);
+    if (response.ok) {
+      return response.json();
+    }
+    if (attempt < maxRetries && (response.status === 429 || response.status >= 500)) {
+      await sleep(400 * (2 ** attempt));
+      continue;
+    }
+    throw new Error(`YouTube API error: ${response.status}`);
+  }
+  throw new Error("YouTube API retry limit exceeded");
+};
+
+const getParserSearchApiUrl = () => {
+  const parserApiUrl = getParserApiUrl();
+  if (!parserApiUrl) return "";
+  if (parserApiUrl.includes("/youtube")) {
+    return parserApiUrl.replace(/\/youtube(?:\?.*)?$/, "/youtube-search");
+  }
+  return `${parserApiUrl.replace(/\/$/, "")}/youtube-search`;
+};
+
+const searchYouTubeCandidates = async (query) => {
+  let browserApiError = null;
+
+  try {
+    const url = new URL("https://www.googleapis.com/youtube/v3/search");
+    url.searchParams.set("part", "snippet");
+    url.searchParams.set("type", "video");
+    url.searchParams.set("maxResults", `${YOUTUBE_SEARCH_MAX_RESULTS}`);
+    url.searchParams.set("regionCode", "RU");
+    url.searchParams.set("relevanceLanguage", "ru");
+    url.searchParams.set("safeSearch", "none");
+    url.searchParams.set("q", query);
+    url.searchParams.set("key", DEFAULT_YOUTUBE_API_KEY);
+
+    const data = await fetchJsonWithRetry(url.toString(), 1);
+    const items = Array.isArray(data?.items) ? data.items : [];
+    const candidates = items.map((item) => ({
+      videoId: item?.id?.videoId || "",
+      title: item?.snippet?.title || "",
+      channelTitle: item?.snippet?.channelTitle || "",
+    })).filter((item) => item.videoId);
+
+    if (candidates.length) {
+      return { candidates, source: "browser-youtube-api", error: null };
+    }
+    browserApiError = "Empty candidates from browser YouTube API";
+  } catch (error) {
+    browserApiError = error instanceof Error ? error.message : String(error);
+  }
+
+  const parserSearchApiUrl = getParserSearchApiUrl();
+  if (!parserSearchApiUrl) {
+    return { candidates: [], source: "none", error: browserApiError || "Parser search URL is missing" };
+  }
+
+  try {
+    const response = await fetch(`${parserSearchApiUrl}?q=${encodeURIComponent(query)}&limit=${YOUTUBE_SEARCH_MAX_RESULTS}`);
+    if (!response.ok) {
+      throw new Error(`Parser search API error: ${response.status}`);
+    }
+    const data = await response.json();
+    const parserCandidates = Array.isArray(data?.candidates) ? data.candidates : [];
+    const candidates = parserCandidates.map((item) => ({
+      videoId: item?.videoId || "",
+      title: item?.title || "",
+      channelTitle: item?.channelTitle || "",
+    })).filter((item) => item.videoId);
+
+    return {
+      candidates,
+      source: "local-parser-search",
+      error: candidates.length ? null : browserApiError || "Empty candidates from parser search",
+    };
+  } catch (error) {
+    const parserError = error instanceof Error ? error.message : String(error);
+    return {
+      candidates: [],
+      source: "none",
+      error: [browserApiError, parserError].filter(Boolean).join(" | "),
+    };
+  }
+};
+
+const getVideoAutoparseState = (video) => {
+  const hasThumbnail = Boolean(video.thumbnail);
+  const hasComments = Array.isArray(video.comments) && video.comments.length > 0;
+  const hasStats = Boolean(
+    video.imported?.stats &&
+    (video.imported.stats.views !== null || video.imported.stats.likes !== null || video.imported.stats.dislikes !== null)
+  );
+  return { hasThumbnail, hasComments, hasStats };
+};
+
+const shouldAutoparseVideo = (video) => {
+  const stateMeta = getVideoAutoparseState(video);
+  return !stateMeta.hasThumbnail || !stateMeta.hasComments || !stateMeta.hasStats;
+};
+
+const runAutoParse = async ({ limit = null, forceTopCandidates = false } = {}) => {
+  const allTargets = state.videos.filter((video) => shouldAutoparseVideo(video));
+  const targets = Number.isFinite(limit) ? allTargets.slice(0, limit) : allTargets;
+
+  if (!targets.length) {
+    alert("В библиотеке нет видео для автопарсинга.");
+    return;
+  }
+
+  const queryMap = new Map();
+  targets.forEach((video) => {
+    const query = normalizeTitleForSearch(video.title || "");
+    if (!query) return;
+    if (!queryMap.has(query)) queryMap.set(query, []);
+    queryMap.get(query).push(video.id);
+  });
+
+  const uniqueQueries = [...queryMap.keys()];
+  if (!uniqueQueries.length) {
+    alert("Не удалось сформировать запросы по названиям видео.");
+    return;
+  }
+
+  const estimatedUnits = uniqueQueries.length * 100;
+  const proceed = confirm(`Найдено ${targets.length} видео для автопарсинга. Будет выполнено ${uniqueQueries.length} поисковых запросов (примерно ${estimatedUnits} quota units). Продолжить?`);
+  if (!proceed) return;
+
+  const searchCache = new Map();
+  const stepTotal = uniqueQueries.length + targets.length;
+  let processed = 0;
+
+  updateImportStatus(processed, stepTotal);
+  if (importLabel) {
+    importLabel.textContent = `Автопоиск YouTube: 0 / ${uniqueQueries.length}`;
+  }
+
+  for (let i = 0; i < uniqueQueries.length; i += 1) {
+    const query = uniqueQueries[i];
+    try {
+      const searchResult = await searchYouTubeCandidates(query);
+      const scored = (searchResult.candidates || [])
+        .map((candidate) => ({
+          ...candidate,
+          score: scoreTitleMatch(query, candidate.title),
+        }))
+        .sort((a, b) => b.score - a.score);
+      searchCache.set(query, {
+        candidates: scored,
+        source: searchResult.source || "unknown",
+        error: searchResult.error || null,
+      });
+    } catch (error) {
+      console.warn("Ошибка YouTube поиска для", query, error);
+      searchCache.set(query, {
+        candidates: [],
+        source: "none",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    processed += 1;
+    updateImportStatus(processed, stepTotal);
+    if (importLabel) {
+      importLabel.textContent = `Автопоиск YouTube: ${i + 1} / ${uniqueQueries.length}`;
+    }
+    await sleep(100);
+  }
+
+  const reviewItems = [];
+  let importedCount = 0;
+  let attemptedCount = 0;
+
+  for (let i = 0; i < targets.length; i += 1) {
+    const video = targets[i];
+    const query = normalizeTitleForSearch(video.title || "");
+    const cached = searchCache.get(query) || { candidates: [], source: "none", error: null };
+    const candidates = (cached.candidates || []).slice(0, 5);
+
+    let imported = false;
+    const candidatesToTry = forceTopCandidates
+      ? candidates.slice(0, 3)
+      : candidates.filter((item) => item.score >= YOUTUBE_MATCH_MIN_FOR_TRY).slice(0, 3);
+
+    for (const candidate of candidatesToTry) {
+      const url = `https://www.youtube.com/watch?v=${candidate.videoId}`;
+      attemptedCount += 1;
+      const ok = await importMetaFromUrl(url, { targetVideoId: video.id, showAlert: false });
+      if (ok) {
+        importedCount += 1;
+        imported = true;
+        if (candidate.score < YOUTUBE_MATCH_HIGH_CONFIDENCE) {
+          reviewItems.push({
+            id: video.id,
+            title: video.title,
+            normalizedTitle: query,
+            youtube: {
+              videoId: candidate.videoId,
+              url,
+              matchedTitle: candidate.title,
+              score: candidate.score,
+              confidence: candidate.score >= YOUTUBE_MATCH_LOW_CONFIDENCE ? "low" : "needs_review",
+              candidates: candidates.slice(0, 3),
+              searchSource: cached.source,
+              searchError: cached.error || undefined,
+            },
+          });
+        }
+        break;
+      }
+      await sleep(120);
+    }
+
+    if (!imported) {
+      const best = candidates[0];
+      reviewItems.push({
+        id: video.id,
+        title: video.title,
+        normalizedTitle: query,
+        youtube: {
+          confidence: "needs_review",
+          score: best?.score || 0,
+          candidates: candidates.slice(0, 3),
+              searchSource: cached.source,
+              searchError: cached.error || undefined,
+        },
+      });
+    }
+
+    processed += 1;
+    updateImportStatus(processed, stepTotal);
+    if (importLabel) {
+      importLabel.textContent = `Импорт метаданных: ${i + 1} / ${targets.length}`;
+    }
+    await sleep(100);
+  }
+
+  resetImportStatus();
+  renderVideos({ reset: true });
+
+  if (reviewItems.length) {
+    const blob = new Blob([JSON.stringify({ items: reviewItems }, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `mytube-autoparse-review-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  alert(`Автопарсинг завершен. Обновлено: ${importedCount} / ${targets.length}. Попыток импорта: ${attemptedCount}. ${reviewItems.length ? "Файл для проверки совпадений скачан." : ""}`);
+};
+
+const autoParseLibrary = async () => runAutoParse();
+
+const autoParseFirst20 = async () => runAutoParse({ limit: 20, forceTopCandidates: true });
+
+const hasMeaningfulYoutubeImport = (payload) => {
+  if (!payload || typeof payload !== "object") return false;
+  const views = payload.stats?.views;
+  const likes = payload.stats?.likes;
+  const commentsFromStats = payload.stats?.comments;
+  const commentsLength = Array.isArray(payload.comments) ? payload.comments.length : 0;
+  return Number.isFinite(views) || Number.isFinite(likes) || Number.isFinite(commentsFromStats) || commentsLength > 0;
 };
 
 const parseInitialJson = (html, marker) => {
@@ -1391,10 +1816,22 @@ const importMetaFromUrl = async (inputUrl, options = {}) => {
   }
 
   let payload = null;
+  let importedSource = "unknown";
+
   try {
-    payload = await fetchUrlImportPayload(inputUrl);
+    payload = await fetchYouTubeApiPayload(inputUrl, id);
+    importedSource = "youtube-browser-api";
   } catch (error) {
-    console.warn("Локальный парсер недоступен, используем fallback по URL.", error);
+    console.warn("Импорт напрямую через YouTube API недоступен, пробуем локальный парсер.", error);
+  }
+
+  if (!payload) {
+    try {
+      payload = await fetchUrlImportPayload(inputUrl);
+      importedSource = "local-parser";
+    } catch (error) {
+      console.warn("Локальный парсер недоступен, используем fallback по URL.", error);
+    }
   }
 
   if (!payload) {
@@ -1421,11 +1858,24 @@ const importMetaFromUrl = async (inputUrl, options = {}) => {
     } catch (error) {
       console.warn("Не удалось получить oEmbed метаданные, используем только video id.", error);
     }
+    importedSource = "oembed-fallback";
+  }
+
+  if (!hasMeaningfulYoutubeImport(payload)) {
+    if (showAlert) {
+      alert("Не удалось загрузить просмотры/лайки/комментарии по URL. Попробуйте позже или запустите локальный парсер (node tools/local-youtube-parser.js).");
+    }
+    return false;
   }
 
   await applyImportedDataToVideo(video, payload, "youtube_url", inputUrl);
   if (showAlert) {
-    alert("Импорт по URL завершен.");
+    const sourceLabel = importedSource === "youtube-browser-api"
+      ? "YouTube API"
+      : importedSource === "local-parser"
+        ? "локальный парсер"
+        : "fallback";
+    alert(`Импорт по URL завершен (${sourceLabel}).`);
   }
   return true;
 };
@@ -1624,6 +2074,30 @@ if (exportBackupBtn) {
 
 if (exportPendingListBtn) {
   exportPendingListBtn.addEventListener("click", exportPendingVideoList);
+}
+
+if (autoParseLibraryBtn) {
+  autoParseLibraryBtn.addEventListener("click", async () => {
+    try {
+      await autoParseLibrary();
+    } catch (error) {
+      console.error(error);
+      resetImportStatus();
+      alert("Не удалось выполнить автопарсинг библиотеки.");
+    }
+  });
+}
+
+if (autoParseFirst20Btn) {
+  autoParseFirst20Btn.addEventListener("click", async () => {
+    try {
+      await autoParseFirst20();
+    } catch (error) {
+      console.error(error);
+      resetImportStatus();
+      alert("Не удалось обновить первые 20 видео.");
+    }
+  });
 }
 
 if (importVideoDataInput) {
