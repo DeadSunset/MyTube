@@ -580,24 +580,76 @@ const fetchJsonWithRetry = async (url, maxRetries = 3) => {
   throw new Error("YouTube API retry limit exceeded");
 };
 
-const searchYouTubeCandidates = async (query) => {
-  const url = new URL("https://www.googleapis.com/youtube/v3/search");
-  url.searchParams.set("part", "snippet");
-  url.searchParams.set("type", "video");
-  url.searchParams.set("maxResults", `${YOUTUBE_SEARCH_MAX_RESULTS}`);
-  url.searchParams.set("regionCode", "RU");
-  url.searchParams.set("relevanceLanguage", "ru");
-  url.searchParams.set("safeSearch", "none");
-  url.searchParams.set("q", query);
-  url.searchParams.set("key", DEFAULT_YOUTUBE_API_KEY);
+const getParserSearchApiUrl = () => {
+  const parserApiUrl = getParserApiUrl();
+  if (!parserApiUrl) return "";
+  if (parserApiUrl.includes("/youtube")) {
+    return parserApiUrl.replace(/\/youtube(?:\?.*)?$/, "/youtube-search");
+  }
+  return `${parserApiUrl.replace(/\/$/, "")}/youtube-search`;
+};
 
-  const data = await fetchJsonWithRetry(url.toString(), 2);
-  const items = Array.isArray(data?.items) ? data.items : [];
-  return items.map((item) => ({
-    videoId: item?.id?.videoId || "",
-    title: item?.snippet?.title || "",
-    channelTitle: item?.snippet?.channelTitle || "",
-  })).filter((item) => item.videoId);
+const searchYouTubeCandidates = async (query) => {
+  let browserApiError = null;
+
+  try {
+    const url = new URL("https://www.googleapis.com/youtube/v3/search");
+    url.searchParams.set("part", "snippet");
+    url.searchParams.set("type", "video");
+    url.searchParams.set("maxResults", `${YOUTUBE_SEARCH_MAX_RESULTS}`);
+    url.searchParams.set("regionCode", "RU");
+    url.searchParams.set("relevanceLanguage", "ru");
+    url.searchParams.set("safeSearch", "none");
+    url.searchParams.set("q", query);
+    url.searchParams.set("key", DEFAULT_YOUTUBE_API_KEY);
+
+    const data = await fetchJsonWithRetry(url.toString(), 1);
+    const items = Array.isArray(data?.items) ? data.items : [];
+    const candidates = items.map((item) => ({
+      videoId: item?.id?.videoId || "",
+      title: item?.snippet?.title || "",
+      channelTitle: item?.snippet?.channelTitle || "",
+    })).filter((item) => item.videoId);
+
+    if (candidates.length) {
+      return { candidates, source: "browser-youtube-api", error: null };
+    }
+    browserApiError = "Empty candidates from browser YouTube API";
+  } catch (error) {
+    browserApiError = error instanceof Error ? error.message : String(error);
+  }
+
+  const parserSearchApiUrl = getParserSearchApiUrl();
+  if (!parserSearchApiUrl) {
+    return { candidates: [], source: "none", error: browserApiError || "Parser search URL is missing" };
+  }
+
+  try {
+    const response = await fetch(`${parserSearchApiUrl}?q=${encodeURIComponent(query)}&limit=${YOUTUBE_SEARCH_MAX_RESULTS}`);
+    if (!response.ok) {
+      throw new Error(`Parser search API error: ${response.status}`);
+    }
+    const data = await response.json();
+    const parserCandidates = Array.isArray(data?.candidates) ? data.candidates : [];
+    const candidates = parserCandidates.map((item) => ({
+      videoId: item?.videoId || "",
+      title: item?.title || "",
+      channelTitle: item?.channelTitle || "",
+    })).filter((item) => item.videoId);
+
+    return {
+      candidates,
+      source: "local-parser-search",
+      error: candidates.length ? null : browserApiError || "Empty candidates from parser search",
+    };
+  } catch (error) {
+    const parserError = error instanceof Error ? error.message : String(error);
+    return {
+      candidates: [],
+      source: "none",
+      error: [browserApiError, parserError].filter(Boolean).join(" | "),
+    };
+  }
 };
 
 const getVideoAutoparseState = (video) => {
@@ -654,17 +706,25 @@ const runAutoParse = async ({ limit = null, forceTopCandidates = false } = {}) =
   for (let i = 0; i < uniqueQueries.length; i += 1) {
     const query = uniqueQueries[i];
     try {
-      const candidates = await searchYouTubeCandidates(query);
-      const scored = candidates
+      const searchResult = await searchYouTubeCandidates(query);
+      const scored = (searchResult.candidates || [])
         .map((candidate) => ({
           ...candidate,
           score: scoreTitleMatch(query, candidate.title),
         }))
         .sort((a, b) => b.score - a.score);
-      searchCache.set(query, scored);
+      searchCache.set(query, {
+        candidates: scored,
+        source: searchResult.source || "unknown",
+        error: searchResult.error || null,
+      });
     } catch (error) {
       console.warn("Ошибка YouTube поиска для", query, error);
-      searchCache.set(query, []);
+      searchCache.set(query, {
+        candidates: [],
+        source: "none",
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
 
     processed += 1;
@@ -682,7 +742,8 @@ const runAutoParse = async ({ limit = null, forceTopCandidates = false } = {}) =
   for (let i = 0; i < targets.length; i += 1) {
     const video = targets[i];
     const query = normalizeTitleForSearch(video.title || "");
-    const candidates = (searchCache.get(query) || []).slice(0, 5);
+    const cached = searchCache.get(query) || { candidates: [], source: "none", error: null };
+    const candidates = (cached.candidates || []).slice(0, 5);
 
     let imported = false;
     const candidatesToTry = forceTopCandidates
@@ -708,6 +769,8 @@ const runAutoParse = async ({ limit = null, forceTopCandidates = false } = {}) =
               score: candidate.score,
               confidence: candidate.score >= YOUTUBE_MATCH_LOW_CONFIDENCE ? "low" : "needs_review",
               candidates: candidates.slice(0, 3),
+              searchSource: cached.source,
+              searchError: cached.error || undefined,
             },
           });
         }
@@ -726,6 +789,8 @@ const runAutoParse = async ({ limit = null, forceTopCandidates = false } = {}) =
           confidence: "needs_review",
           score: best?.score || 0,
           candidates: candidates.slice(0, 3),
+              searchSource: cached.source,
+              searchError: cached.error || undefined,
         },
       });
     }

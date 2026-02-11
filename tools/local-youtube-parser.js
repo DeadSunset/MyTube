@@ -5,8 +5,9 @@
  * Usage:
  *   node tools/local-youtube-parser.js
  *
- * Endpoint:
+ * Endpoints:
  *   GET /youtube?url=https://www.youtube.com/watch?v=VIDEO_ID
+ *   GET /youtube-search?q=video+title
  */
 
 const http = require("node:http");
@@ -211,6 +212,88 @@ const parseCommentThread = (thread, order) => {
   };
 };
 
+const collectVideoRenderers = (node, bucket = []) => {
+  if (!node || typeof node !== "object") return bucket;
+  if (Array.isArray(node)) {
+    node.forEach((item) => collectVideoRenderers(item, bucket));
+    return bucket;
+  }
+  if (node.videoRenderer) {
+    bucket.push(node.videoRenderer);
+  }
+  Object.values(node).forEach((value) => collectVideoRenderers(value, bucket));
+  return bucket;
+};
+
+const parseSearchHtmlCandidates = (html) => {
+  const initialData = parseInitialJson(html, "ytInitialData") || {};
+  const renderers = collectVideoRenderers(initialData).slice(0, 10);
+  return renderers
+    .map((renderer) => ({
+      videoId: renderer.videoId || "",
+      title: readTextLike(renderer.title).trim() || "",
+      channelTitle: readTextLike(renderer.ownerText).trim() || "",
+    }))
+    .filter((item) => item.videoId && item.title);
+};
+
+const fetchYouTubeApiSearchCandidates = async (query, limit = 10) => {
+  const searchApiUrl = new URL("https://www.googleapis.com/youtube/v3/search");
+  searchApiUrl.searchParams.set("part", "snippet");
+  searchApiUrl.searchParams.set("q", query);
+  searchApiUrl.searchParams.set("type", "video");
+  searchApiUrl.searchParams.set("maxResults", `${Math.max(1, Math.min(limit, 10))}`);
+  searchApiUrl.searchParams.set("regionCode", "RU");
+  searchApiUrl.searchParams.set("relevanceLanguage", "ru");
+  searchApiUrl.searchParams.set("safeSearch", "none");
+  searchApiUrl.searchParams.set("key", YOUTUBE_API_KEY);
+
+  const searchData = await fetchJson(searchApiUrl);
+  const items = Array.isArray(searchData?.items) ? searchData.items : [];
+  return items
+    .map((item) => ({
+      videoId: item?.id?.videoId || "",
+      title: item?.snippet?.title || "",
+      channelTitle: item?.snippet?.channelTitle || "",
+    }))
+    .filter((item) => item.videoId);
+};
+
+const fetchSearchPayload = async (query, limit = 10) => {
+  const trimmedQuery = `${query || ""}`.trim();
+  if (!trimmedQuery) {
+    return { query: "", candidates: [] };
+  }
+
+  let apiError = null;
+  try {
+    if (YOUTUBE_API_KEY) {
+      const candidates = await fetchYouTubeApiSearchCandidates(trimmedQuery, limit);
+      return {
+        query: trimmedQuery,
+        candidates,
+        meta: { parser: "youtube-data-api-v3-search", limit },
+      };
+    }
+  } catch (error) {
+    apiError = error;
+  }
+
+  const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(trimmedQuery)}&hl=ru`;
+  const html = await fetchText(searchUrl);
+  const candidates = parseSearchHtmlCandidates(html).slice(0, Math.max(1, Math.min(limit, 10)));
+
+  return {
+    query: trimmedQuery,
+    candidates,
+    meta: {
+      parser: "youtube-search-html",
+      limit,
+      apiFallbackError: apiError ? errorToMessage(apiError) : undefined,
+    },
+  };
+};
+
 const fetchText = (targetUrl) =>
   new Promise((resolve, reject) => {
     const req = https.get(
@@ -390,6 +473,25 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (incoming.pathname === "/youtube-search") {
+    const query = incoming.searchParams.get("q") || "";
+    const limit = Number.parseInt(incoming.searchParams.get("limit") || "8", 10);
+    if (!query.trim()) {
+      json(res, 400, { error: "Missing search query" });
+      return;
+    }
+    try {
+      const payload = await fetchSearchPayload(query, limit);
+      json(res, 200, payload);
+    } catch (error) {
+      json(res, 500, {
+        error: "Failed to search YouTube",
+        details: errorToMessage(error),
+      });
+    }
+    return;
+  }
+
   if (incoming.pathname !== "/youtube") {
     json(res, 404, { error: "Not found" });
     return;
@@ -445,4 +547,5 @@ server.listen(PORT, HOST, () => {
   console.log(`MyTube local parser is running on http://${HOST}:${PORT}`);
   console.log(`Health check: http://${HOST}:${PORT}/health`);
   console.log(`Endpoint:     http://${HOST}:${PORT}/youtube?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ`);
+  console.log(`Search:       http://${HOST}:${PORT}/youtube-search?q=video+title`);
 });
