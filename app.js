@@ -16,6 +16,7 @@ const libraryView = document.getElementById("libraryView");
 const watchView = document.getElementById("watchView");
 const shortsView = document.getElementById("shortsView");
 const profileView = document.getElementById("profileView");
+const urlFillerView = document.getElementById("urlFillerView");
 const videoPlayer = document.getElementById("videoPlayer");
 const watchTitle = document.getElementById("watchTitle");
 const likeBtn = document.getElementById("likeBtn");
@@ -56,6 +57,7 @@ const autoParseFirst20Btn = document.getElementById("autoParseFirst20Btn");
 const importVideoDataInput = document.getElementById("importVideoDataInput");
 const autoAddTreeBtn = document.getElementById("autoAddTreeBtn");
 const autoAddTreeInput = document.getElementById("autoAddTreeInput");
+const openUrlFillerBtn = document.getElementById("openUrlFillerBtn");
 const youtubeApiKeyInput = document.getElementById("youtubeApiKeyInput");
 const folderParseTools = document.getElementById("folderParseTools");
 const folderParseTitle = document.getElementById("folderParseTitle");
@@ -72,6 +74,15 @@ const watchImportSource = document.getElementById("watchImportSource");
 const changeThumbnailBtn = document.getElementById("changeThumbnailBtn");
 const resetThumbnailBtn = document.getElementById("resetThumbnailBtn");
 const thumbnailInput = document.getElementById("thumbnailInput");
+const urlFillerBackBtn = document.getElementById("urlFillerBackBtn");
+const urlFillerProgress = document.getElementById("urlFillerProgress");
+const urlFillerVideoTitle = document.getElementById("urlFillerVideoTitle");
+const urlFillerChannelName = document.getElementById("urlFillerChannelName");
+const urlFillerUrlInput = document.getElementById("urlFillerUrlInput");
+const urlFillerImportUrlBtn = document.getElementById("urlFillerImportUrlBtn");
+const urlFillerImportHtmlBtn = document.getElementById("urlFillerImportHtmlBtn");
+const urlFillerHtmlInput = document.getElementById("urlFillerHtmlInput");
+const urlFillerSkipBtn = document.getElementById("urlFillerSkipBtn");
 
 const DB_NAME = "mytube-db";
 const DB_VERSION = 1;
@@ -110,6 +121,8 @@ let state = {
   activeShortsId: null,
   watchedHistory: [],
   historyMode: false,
+  urlFillerQueue: [],
+  urlFillerIndex: 0,
 };
 
 const openDb = () =>
@@ -1645,12 +1658,19 @@ const switchView = (view) => {
   if (profileView) {
     profileView.classList.remove("active");
   }
+  if (urlFillerView) {
+    urlFillerView.classList.remove("active");
+  }
   if (view === "watch") {
     watchView.classList.add("active");
     stopShortsPlayback();
   } else if (view === "shorts") {
     shortsView.classList.add("active");
     stopMainPlayback();
+  } else if (view === "url-filler" && urlFillerView) {
+    urlFillerView.classList.add("active");
+    stopMainPlayback();
+    stopShortsPlayback();
   } else if (view === "profile" && profileView) {
     profileView.classList.add("active");
     stopMainPlayback();
@@ -1660,6 +1680,64 @@ const switchView = (view) => {
     stopMainPlayback();
     stopShortsPlayback();
   }
+};
+
+const getUrlFillerTargets = () => {
+  const targets = state.videos.filter((video) => shouldAutoparseVideo(video));
+  if (targets.length) return targets;
+  return state.videos;
+};
+
+const getUrlFillerCurrentVideo = () => {
+  const id = state.urlFillerQueue[state.urlFillerIndex];
+  if (!id) return null;
+  return state.videos.find((video) => video.id === id) || null;
+};
+
+const renderUrlFiller = () => {
+  if (!urlFillerVideoTitle || !urlFillerChannelName || !urlFillerProgress) return;
+
+  const total = state.urlFillerQueue.length;
+  if (!total) {
+    urlFillerProgress.textContent = "Нет видео для заполнения";
+    urlFillerVideoTitle.textContent = "Все видео заполнены";
+    urlFillerChannelName.textContent = "";
+    return;
+  }
+
+  const current = getUrlFillerCurrentVideo();
+  if (!current) {
+    urlFillerProgress.textContent = "Нет текущего видео";
+    urlFillerVideoTitle.textContent = "—";
+    urlFillerChannelName.textContent = "—";
+    return;
+  }
+
+  urlFillerProgress.textContent = `Видео ${state.urlFillerIndex + 1} из ${total}`;
+  urlFillerVideoTitle.textContent = current.title || "Без названия";
+  urlFillerChannelName.textContent = current.channelName || current.folderName || "Канал не указан";
+};
+
+const openUrlFiller = () => {
+  const targets = getUrlFillerTargets();
+  state.urlFillerQueue = targets.map((video) => video.id);
+  state.urlFillerIndex = 0;
+  switchView("url-filler");
+  renderUrlFiller();
+};
+
+const moveUrlFillerNext = () => {
+  if (!state.urlFillerQueue.length) return;
+  if (state.urlFillerIndex < state.urlFillerQueue.length - 1) {
+    state.urlFillerIndex += 1;
+    renderUrlFiller();
+    return;
+  }
+
+  alert("Готово: достигнут конец списка видео.");
+  state.urlFillerQueue = [];
+  state.urlFillerIndex = 0;
+  renderUrlFiller();
 };
 
 const openVideo = async (videoId) => {
@@ -2072,7 +2150,9 @@ const applyImportedDataToVideo = async (video, payload, source, sourceUrl = "") 
   };
   if (payload.title) {
     video.title = payload.title;
-    watchTitle.textContent = payload.title;
+    if (state.activeVideoId === video.id && watchTitle) {
+      watchTitle.textContent = payload.title;
+    }
   }
   if (payload.channelName) {
     video.channelName = payload.channelName;
@@ -2098,17 +2178,24 @@ const applyImportedDataToVideo = async (video, payload, source, sourceUrl = "") 
   renderVideos({ reset: true });
 };
 
-const importMetaFromHtmlFile = async (file) => {
-  const video = state.videos.find((item) => item.id === state.activeVideoId);
-  if (!video || !file) return;
+const importMetaFromHtmlFile = async (file, options = {}) => {
+  const targetVideoId = options.targetVideoId || state.activeVideoId;
+  const showAlert = options.showAlert !== false;
+  const video = state.videos.find((item) => item.id === targetVideoId);
+  if (!video || !file) return false;
   const htmlText = await file.text();
   const payload = parseYoutubeHtmlPayload(htmlText);
   if (!payload.title && !(payload.comments || []).length) {
-    alert("Не удалось распарсить YouTube HTML. Попробуйте сохранить полную страницу видео.");
-    return;
+    if (showAlert) {
+      alert("Не удалось распарсить YouTube HTML. Попробуйте сохранить полную страницу видео.");
+    }
+    return false;
   }
   await applyImportedDataToVideo(video, payload, "youtube_html", "local-html");
-  alert("HTML импорт завершен.");
+  if (showAlert) {
+    alert("HTML импорт завершен.");
+  }
+  return true;
 };
 
 const importMetaFromUrl = async (inputUrl, options = {}) => {
@@ -2353,6 +2440,79 @@ if (logoLink) {
 if (profileBtn) {
   profileBtn.addEventListener("click", () => {
     switchView("profile");
+  });
+}
+if (openUrlFillerBtn) {
+  openUrlFillerBtn.addEventListener("click", () => {
+    openUrlFiller();
+  });
+}
+if (urlFillerBackBtn) {
+  urlFillerBackBtn.addEventListener("click", () => {
+    switchView("profile");
+  });
+}
+if (urlFillerSkipBtn) {
+  urlFillerSkipBtn.addEventListener("click", () => {
+    moveUrlFillerNext();
+  });
+}
+if (urlFillerImportHtmlBtn && urlFillerHtmlInput) {
+  urlFillerImportHtmlBtn.addEventListener("click", () => {
+    const current = getUrlFillerCurrentVideo();
+    if (!current) {
+      alert("Нет текущего видео для заполнения.");
+      return;
+    }
+    urlFillerHtmlInput.click();
+  });
+
+  urlFillerHtmlInput.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    const current = getUrlFillerCurrentVideo();
+    if (!current) {
+      alert("Нет текущего видео для заполнения.");
+      return;
+    }
+    try {
+      const ok = await importMetaFromHtmlFile(file, { targetVideoId: current.id, showAlert: false });
+      if (!ok) {
+        alert("HTML не обработан. Попробуйте другой файл.");
+        return;
+      }
+      moveUrlFillerNext();
+    } catch (error) {
+      console.error(error);
+      alert("Ошибка обработки HTML.");
+    }
+  });
+}
+if (urlFillerImportUrlBtn && urlFillerUrlInput) {
+  urlFillerImportUrlBtn.addEventListener("click", async () => {
+    const current = getUrlFillerCurrentVideo();
+    if (!current) {
+      alert("Нет текущего видео для заполнения.");
+      return;
+    }
+    const url = urlFillerUrlInput.value.trim();
+    if (!url) {
+      alert("Вставьте URL видео.");
+      return;
+    }
+    try {
+      const ok = await importMetaFromUrl(url, { targetVideoId: current.id, showAlert: false });
+      if (!ok) {
+        alert("URL не обработан. Проверьте ссылку или попробуйте HTML.");
+        return;
+      }
+      urlFillerUrlInput.value = "";
+      moveUrlFillerNext();
+    } catch (error) {
+      console.error(error);
+      alert("Ошибка обработки URL.");
+    }
   });
 }
 shortsTab.addEventListener("click", () => {

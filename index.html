@@ -176,10 +176,38 @@
                 <input id="importVideoDataInput" type="file" accept="application/json" hidden />
                 <button id="autoAddTreeBtn" class="btn">Автодобавить папку (каналы/плейлисты)</button>
                 <input id="autoAddTreeInput" type="file" webkitdirectory multiple hidden />
+                <button id="openUrlFillerBtn" class="btn">Заполнятель URL</button>
               </div>
               <div class="profile-api-config">
                 <label for="youtubeApiKeyInput" class="muted">YouTube API Key (обязательно, ключ именно для YouTube Data API v3)</label>
                 <input id="youtubeApiKeyInput" type="password" placeholder="AIza..." />
+              </div>
+            </div>
+          </div>
+
+          <div id="urlFillerView" class="view">
+            <div class="url-filler-panel">
+              <div class="url-filler-head">
+                <h2>Заполнятель URL</h2>
+                <button id="urlFillerBackBtn" class="btn">Назад в профиль</button>
+              </div>
+              <p class="muted">Видео файл не показывается. Вставьте URL или загрузите HTML для текущего видео из общего каталога.</p>
+
+              <div class="url-filler-card">
+                <p class="muted" id="urlFillerProgress">—</p>
+                <h3 id="urlFillerVideoTitle">—</h3>
+                <p id="urlFillerChannelName" class="muted">—</p>
+              </div>
+
+              <div class="url-filler-actions">
+                <input id="urlFillerUrlInput" type="url" placeholder="https://www.youtube.com/watch?v=..." />
+                <button id="urlFillerImportUrlBtn" class="btn">Обработать URL</button>
+              </div>
+
+              <div class="url-filler-actions">
+                <button id="urlFillerImportHtmlBtn" class="btn">Обработать HTML</button>
+                <input id="urlFillerHtmlInput" type="file" accept=".html,text/html" hidden />
+                <button id="urlFillerSkipBtn" class="btn">Пропустить</button>
               </div>
             </div>
           </div>
