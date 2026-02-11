@@ -257,7 +257,7 @@ body {
   gap: 8px;
 }
 
-#localParserApiInput {
+#channelUrlInput {
   width: 100%;
   background: #121212;
   border: 1px solid #303030;
@@ -591,9 +591,7 @@ video {
   flex-direction: column;
   gap: 10px;
   margin-top: 12px;
-  max-height: 240px;
-  overflow-y: auto;
-  padding-right: 4px;
+  padding-right: 0;
 }
 
 .comment {
