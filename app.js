@@ -381,6 +381,32 @@ const ensureYouTubeApiKey = () => {
   return key;
 };
 
+const getYouTubeApiKeyCandidates = () => {
+  const keys = [getYouTubeApiKey(), DEFAULT_YOUTUBE_API_KEY].filter(Boolean);
+  return [...new Set(keys)];
+};
+
+const withYouTubeApiKeyFallback = async (runner) => {
+  const keys = getYouTubeApiKeyCandidates();
+  let lastError = null;
+
+  for (const key of keys) {
+    try {
+      return await runner(key);
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      const shouldTryNext = /403/.test(message) || /API key/i.test(message);
+      if (!shouldTryNext) {
+        throw error;
+      }
+    }
+  }
+
+  if (lastError) throw lastError;
+  throw new Error("No available YouTube API key");
+};
+
 const isVideoMissingMeta = (video) => {
   const hasThumbnail = Boolean(video.thumbnail);
   const hasComments = Array.isArray(video.comments) && video.comments.length > 0;
@@ -493,11 +519,11 @@ const buildCommentsFromYouTubeApi = (threads = []) => threads
   })
   .filter(Boolean);
 
-const fetchYouTubeApiPayload = async (inputUrl, videoId) => {
+const fetchYouTubeApiPayload = async (inputUrl, videoId) => withYouTubeApiKeyFallback(async (apiKey) => {
   const videoApiUrl = new URL("https://www.googleapis.com/youtube/v3/videos");
   videoApiUrl.searchParams.set("part", "snippet,statistics");
   videoApiUrl.searchParams.set("id", videoId);
-  videoApiUrl.searchParams.set("key", ensureYouTubeApiKey());
+  videoApiUrl.searchParams.set("key", apiKey);
 
   const commentsApiUrl = new URL("https://www.googleapis.com/youtube/v3/commentThreads");
   commentsApiUrl.searchParams.set("part", "snippet,replies");
@@ -505,7 +531,7 @@ const fetchYouTubeApiPayload = async (inputUrl, videoId) => {
   commentsApiUrl.searchParams.set("maxResults", `${YOUTUBE_IMPORT_MAX_COMMENTS}`);
   commentsApiUrl.searchParams.set("order", "relevance");
   commentsApiUrl.searchParams.set("textFormat", "plainText");
-  commentsApiUrl.searchParams.set("key", ensureYouTubeApiKey());
+  commentsApiUrl.searchParams.set("key", apiKey);
 
   const [videoResponse, commentsResponse] = await Promise.all([
     fetch(videoApiUrl.toString()),
@@ -550,7 +576,7 @@ const fetchYouTubeApiPayload = async (inputUrl, videoId) => {
       commentsLimit: YOUTUBE_IMPORT_MAX_COMMENTS,
     },
   };
-};
+});
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -636,32 +662,35 @@ const resolveChannelId = async (channelValue = "") => {
   const handle = parseHandleFromValue(channelValue);
   if (!handle) return "";
 
-  const searchUrl = new URL("https://www.googleapis.com/youtube/v3/search");
-  searchUrl.searchParams.set("part", "snippet");
-  searchUrl.searchParams.set("type", "channel");
-  searchUrl.searchParams.set("maxResults", "1");
-  searchUrl.searchParams.set("q", handle);
-  searchUrl.searchParams.set("key", ensureYouTubeApiKey());
-
-  const data = await fetchJsonWithRetry(searchUrl.toString(), 1);
+  const data = await withYouTubeApiKeyFallback(async (apiKey) => {
+    const searchUrl = new URL("https://www.googleapis.com/youtube/v3/search");
+    searchUrl.searchParams.set("part", "snippet");
+    searchUrl.searchParams.set("type", "channel");
+    searchUrl.searchParams.set("maxResults", "1");
+    searchUrl.searchParams.set("q", handle);
+    searchUrl.searchParams.set("key", apiKey);
+    return fetchJsonWithRetry(searchUrl.toString(), 1);
+  });
   return data?.items?.[0]?.snippet?.channelId || "";
 };
 
 const searchYouTubeCandidates = async (query, options = {}) => {
-  const url = new URL("https://www.googleapis.com/youtube/v3/search");
-  url.searchParams.set("part", "snippet");
-  url.searchParams.set("type", "video");
-  url.searchParams.set("maxResults", `${YOUTUBE_SEARCH_MAX_RESULTS}`);
-  url.searchParams.set("regionCode", "RU");
-  url.searchParams.set("relevanceLanguage", "ru");
-  url.searchParams.set("safeSearch", "none");
-  url.searchParams.set("q", query);
-  if (options.channelId) {
-    url.searchParams.set("channelId", options.channelId);
-  }
-  url.searchParams.set("key", ensureYouTubeApiKey());
+  const data = await withYouTubeApiKeyFallback(async (apiKey) => {
+    const url = new URL("https://www.googleapis.com/youtube/v3/search");
+    url.searchParams.set("part", "snippet");
+    url.searchParams.set("type", "video");
+    url.searchParams.set("maxResults", `${YOUTUBE_SEARCH_MAX_RESULTS}`);
+    url.searchParams.set("regionCode", "RU");
+    url.searchParams.set("relevanceLanguage", "ru");
+    url.searchParams.set("safeSearch", "none");
+    url.searchParams.set("q", query);
+    if (options.channelId) {
+      url.searchParams.set("channelId", options.channelId);
+    }
+    url.searchParams.set("key", apiKey);
+    return fetchJsonWithRetry(url.toString(), 1);
+  });
 
-  const data = await fetchJsonWithRetry(url.toString(), 1);
   const items = Array.isArray(data?.items) ? data.items : [];
   const candidates = items.map((item) => ({
     videoId: item?.id?.videoId || "",
@@ -1912,7 +1941,7 @@ const importMetaFromUrl = async (inputUrl, options = {}) => {
 
   if (!hasMeaningfulYoutubeImport(payload)) {
     if (showAlert) {
-      alert("Не удалось загрузить просмотры/лайки/комментарии по URL. Если видите 403, проверьте что используете API KEY (не OAuth client), включен YouTube Data API v3 и настроены ограничения referrer/quota.");
+      alert("Не удалось загрузить просмотры/лайки/комментарии по URL. Если видите 403, проверьте API KEY (не OAuth client), включен YouTube Data API v3 и сняты/корректно настроены ограничения referrer/quota. Также можно вставить ключ в профиль и оставить поле пустым — приложение попробует резервный ключ.");
     }
     return false;
   }
