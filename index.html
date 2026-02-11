@@ -66,6 +66,14 @@
                 </label>
               </div>
             </div>
+            <div id="folderParseTools" class="folder-parse-tools hidden">
+              <span id="folderParseTitle" class="muted"></span>
+              <input id="channelUrlInput" type="url" placeholder="URL YouTube-канала для текущей папки" />
+              <div class="folder-parse-actions">
+                <button id="autoParseFirst20Btn" class="btn">Обновить первые 20 из папки</button>
+                <button id="autoParseLibraryBtn" class="btn">Автопарсить текущую папку</button>
+              </div>
+            </div>
             <div id="videoGrid" class="video-grid"></div>
           </div>
 
@@ -85,7 +93,7 @@
                 </div>
                 <section class="import-tools">
                   <h3>Импорт метаданных и превью</h3>
-                  <p class="muted">Работает локально в Live Server. Для полного импорта комментариев/лайков/просмотров по URL можно подключить локальный парсер API.</p>
+                  <p class="muted">Работает через YouTube API Key. Загружаются просмотры, лайки, до 50 комментариев и до 10 ответов к каждому (если доступны).</p>
                   <div class="import-actions">
                     <button id="importHtmlBtn" class="btn">Импортировать HTML</button>
                     <input id="importHtmlInput" type="file" accept=".html,text/html" hidden />
@@ -164,12 +172,12 @@
               </div>
               <div class="profile-actions profile-import-actions">
                 <button id="exportPendingListBtn" class="btn">Экспортировать список видео без превью/комментов</button>
-                <label class="btn" for="importVideoDataInput">Импортировать данные</label>
+                                <label class="btn" for="importVideoDataInput">Импортировать данные</label>
                 <input id="importVideoDataInput" type="file" accept="application/json" hidden />
               </div>
               <div class="profile-api-config">
-                <label for="localParserApiInput" class="muted">Локальный URL парсера (для полного импорта по ссылке)</label>
-                <input id="localParserApiInput" type="url" placeholder="http://127.0.0.1:8787/youtube" />
+                <label for="youtubeApiKeyInput" class="muted">YouTube API Key (обязательно, ключ именно для YouTube Data API v3)</label>
+                <input id="youtubeApiKeyInput" type="password" placeholder="AIza..." />
               </div>
             </div>
           </div>
