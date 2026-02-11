@@ -257,7 +257,8 @@ body {
   gap: 8px;
 }
 
-#localParserApiInput {
+#channelUrlInput,
+#youtubeApiKeyInput {
   width: 100%;
   background: #121212;
   border: 1px solid #303030;
@@ -591,9 +592,7 @@ video {
   flex-direction: column;
   gap: 10px;
   margin-top: 12px;
-  max-height: 240px;
-  overflow-y: auto;
-  padding-right: 4px;
+  padding-right: 0;
 }
 
 .comment {
@@ -756,4 +755,25 @@ video {
   .sidebar {
     display: none;
   }
+}
+
+
+.folder-parse-tools {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid #2b2b2b;
+  border-radius: 8px;
+  background: #171717;
+}
+
+.folder-parse-tools.hidden {
+  display: none;
+}
+
+.folder-parse-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
