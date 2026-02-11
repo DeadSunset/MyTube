@@ -16,6 +16,7 @@ const libraryView = document.getElementById("libraryView");
 const watchView = document.getElementById("watchView");
 const shortsView = document.getElementById("shortsView");
 const profileView = document.getElementById("profileView");
+const urlFillerView = document.getElementById("urlFillerView");
 const videoPlayer = document.getElementById("videoPlayer");
 const watchTitle = document.getElementById("watchTitle");
 const likeBtn = document.getElementById("likeBtn");
@@ -56,6 +57,7 @@ const autoParseFirst20Btn = document.getElementById("autoParseFirst20Btn");
 const importVideoDataInput = document.getElementById("importVideoDataInput");
 const autoAddTreeBtn = document.getElementById("autoAddTreeBtn");
 const autoAddTreeInput = document.getElementById("autoAddTreeInput");
+const openUrlFillerBtn = document.getElementById("openUrlFillerBtn");
 const youtubeApiKeyInput = document.getElementById("youtubeApiKeyInput");
 const folderParseTools = document.getElementById("folderParseTools");
 const folderParseTitle = document.getElementById("folderParseTitle");
@@ -72,6 +74,15 @@ const watchImportSource = document.getElementById("watchImportSource");
 const changeThumbnailBtn = document.getElementById("changeThumbnailBtn");
 const resetThumbnailBtn = document.getElementById("resetThumbnailBtn");
 const thumbnailInput = document.getElementById("thumbnailInput");
+const urlFillerBackBtn = document.getElementById("urlFillerBackBtn");
+const urlFillerProgress = document.getElementById("urlFillerProgress");
+const urlFillerVideoTitle = document.getElementById("urlFillerVideoTitle");
+const urlFillerChannelName = document.getElementById("urlFillerChannelName");
+const urlFillerUrlInput = document.getElementById("urlFillerUrlInput");
+const urlFillerImportUrlBtn = document.getElementById("urlFillerImportUrlBtn");
+const urlFillerImportHtmlBtn = document.getElementById("urlFillerImportHtmlBtn");
+const urlFillerHtmlInput = document.getElementById("urlFillerHtmlInput");
+const urlFillerSkipBtn = document.getElementById("urlFillerSkipBtn");
 
 const DB_NAME = "mytube-db";
 const DB_VERSION = 1;
@@ -110,6 +121,8 @@ let state = {
   activeShortsId: null,
   watchedHistory: [],
   historyMode: false,
+  urlFillerQueue: [],
+  urlFillerIndex: 0,
 };
 
 const openDb = () =>
@@ -321,13 +334,30 @@ const extractYouTubeVideoId = (urlOrId) => {
 };
 
 const parseCompactNumber = (value) => {
-  if (!value) return null;
-  const normalized = `${value}`.replace(/\s+/g, " ").trim().toLowerCase();
-  const number = Number.parseFloat(normalized.replace(/[^\d.,]/g, "").replace(",", "."));
+  if (!value && value !== 0) return null;
+  const normalized = `${value}`
+    .replace(/\u00A0|\u202F/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+  let numberPart = normalized.replace(/[^\d.,]/g, "");
+  if (!numberPart) return null;
+
+  const hasComma = numberPart.includes(",");
+  const hasDot = numberPart.includes(".");
+  if (hasComma && hasDot) {
+    numberPart = numberPart.replace(/,/g, "");
+  } else if (hasComma) {
+    numberPart = numberPart.replace(",", ".");
+  }
+
+  const number = Number.parseFloat(numberPart);
   if (!Number.isFinite(number)) return null;
-  if (normalized.includes("тыс")) return Math.round(number * 1_000);
-  if (normalized.includes("млн")) return Math.round(number * 1_000_000);
-  if (normalized.includes("млрд")) return Math.round(number * 1_000_000_000);
+
+  if (/(?:тыс|k)(?:\b|\.)/.test(normalized)) return Math.round(number * 1_000);
+  if (/(?:млн|m)(?:\b|\.)/.test(normalized)) return Math.round(number * 1_000_000);
+  if (/(?:млрд|b)(?:\b|\.)/.test(normalized)) return Math.round(number * 1_000_000_000);
   return Math.round(number);
 };
 
@@ -930,14 +960,12 @@ const hasMeaningfulYoutubeImport = (payload) => {
   return Number.isFinite(views) || Number.isFinite(likes) || Number.isFinite(commentsFromStats) || commentsLength > 0;
 };
 
-const parseInitialJson = (html, marker) => {
-  const idx = html.indexOf(marker);
-  if (idx < 0) return null;
-  const start = html.indexOf("{", idx);
+const parseObjectFromIndex = (html, start) => {
   if (start < 0) return null;
   let depth = 0;
   let inString = false;
   let escaped = false;
+
   for (let i = start; i < html.length; i += 1) {
     const ch = html[i];
     if (inString) {
@@ -970,47 +998,146 @@ const parseInitialJson = (html, marker) => {
   return null;
 };
 
-const collectCommentNodes = (node, bucket = []) => {
+const parseInitialJson = (html, marker) => {
+  const patterns = [
+    new RegExp(`(?:var\\s+)?${marker}\\s*=`),
+    new RegExp(`\"${marker}\"`),
+    new RegExp(marker),
+  ];
+
+  for (const pattern of patterns) {
+    const match = pattern.exec(html);
+    if (!match) continue;
+    const start = html.indexOf("{", match.index + match[0].length);
+    const parsed = parseObjectFromIndex(html, start);
+    if (parsed) return parsed;
+  }
+
+  return null;
+};
+
+const readTextLike = (node) => {
+  if (!node) return "";
+  if (typeof node === "string") return node;
+  if (node.simpleText) return node.simpleText;
+  if (Array.isArray(node.runs)) {
+    return node.runs.map((run) => run.text || "").join("");
+  }
+  return "";
+};
+
+const collectCommentThreadRenderers = (node, bucket = []) => {
   if (!node || typeof node !== "object") return bucket;
   if (Array.isArray(node)) {
-    node.forEach((item) => collectCommentNodes(item, bucket));
+    node.forEach((item) => collectCommentThreadRenderers(item, bucket));
     return bucket;
   }
-  if (node.commentRenderer) bucket.push(node.commentRenderer);
-  Object.values(node).forEach((value) => collectCommentNodes(value, bucket));
+  if (node.commentThreadRenderer) bucket.push(node.commentThreadRenderer);
+  Object.values(node).forEach((value) => collectCommentThreadRenderers(value, bucket));
   return bucket;
+};
+
+const parseReplyRenderer = (renderer, idx = 0) => {
+  if (!renderer) return null;
+  const text = readTextLike(renderer.contentText).trim();
+  if (!text) return null;
+  return {
+    id: renderer.commentId || `reply-${idx}`,
+    author: readTextLike(renderer.authorText).trim() || "YouTube user",
+    text,
+    createdAt: Date.now(),
+  };
+};
+
+const parseThreadRenderer = (thread, order = 0) => {
+  const renderer = thread?.comment?.commentRenderer;
+  if (!renderer) return null;
+
+  const text = readTextLike(renderer.contentText).trim();
+  if (!text) return null;
+
+  const likeText =
+    readTextLike(renderer.voteCount) ||
+    renderer.voteCount?.accessibility?.accessibilityData?.label ||
+    "";
+
+  const replyNodes = thread?.replies?.commentRepliesRenderer?.contents || [];
+  const replies = Array.isArray(replyNodes)
+    ? replyNodes
+        .map((item, idx) => parseReplyRenderer(item?.commentRenderer, idx))
+        .filter(Boolean)
+    : [];
+
+  const replyCount = parseCompactNumber(
+    readTextLike(thread?.replies?.commentRepliesRenderer?.moreText) ||
+      thread?.replies?.commentRepliesRenderer?.moreText?.accessibility?.accessibilityData?.label ||
+      ""
+  );
+
+  return normalizeComment({
+    id: renderer.commentId || crypto.randomUUID(),
+    author: readTextLike(renderer.authorText).trim() || "YouTube user",
+    text,
+    likes: parseCompactNumber(likeText) || 0,
+    createdAt: Date.now(),
+    replies,
+    order,
+    replyCount: Number.isFinite(replyCount) ? Math.max(replyCount, replies.length) : replies.length,
+  }, readTextLike(renderer.authorText).trim() || "YouTube user");
+};
+
+const parseLikeCountFromInitialData = (initialData) => {
+  if (!initialData || typeof initialData !== "object") return null;
+  const stack = [initialData];
+
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node || typeof node !== "object") continue;
+    if (Array.isArray(node)) {
+      stack.push(...node);
+      continue;
+    }
+
+    if (node.toggleButtonRenderer?.defaultText) {
+      const label =
+        readTextLike(node.toggleButtonRenderer.defaultText) ||
+        node.toggleButtonRenderer?.defaultText?.accessibility?.accessibilityData?.label ||
+        "";
+      const parsed = parseCompactNumber(label);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+
+    Object.values(node).forEach((value) => {
+      if (value && typeof value === "object") stack.push(value);
+    });
+  }
+
+  return null;
 };
 
 const parseYoutubeHtmlPayload = (htmlText) => {
   const playerData = parseInitialJson(htmlText, "ytInitialPlayerResponse") || {};
   const initialData = parseInitialJson(htmlText, "ytInitialData") || {};
   const details = playerData.videoDetails || {};
-  const commentsRaw = collectCommentNodes(initialData);
-  const comments = commentsRaw.map((item, index) => {
-    const textRuns = item.contentText?.runs || [];
-    const text = textRuns.map((run) => run.text || "").join("").trim();
-    const author = item.authorText?.simpleText || "YouTube user";
-    const likes = parseCompactNumber(item.voteCount?.simpleText || item.voteCount?.accessibility?.accessibilityData?.label);
-    return normalizeComment({
-      id: item.commentId || crypto.randomUUID(),
-      author,
-      text,
-      likes: likes || 0,
-      createdAt: Date.now(),
-      replies: [],
-      order: index,
-      replyCount: 0,
-    }, author);
-  }).filter((item) => item.text);
+  const commentsRaw = collectCommentThreadRenderers(initialData);
+  const comments = commentsRaw
+    .map((thread, index) => parseThreadRenderer(thread, index))
+    .filter(Boolean);
 
-  const viewCount = parseCompactNumber(details.viewCount || details.shortViewCountText?.simpleText);
+  const viewCount =
+    parseCompactNumber(details.viewCount) ||
+    parseCompactNumber(playerData?.microformat?.playerMicroformatRenderer?.viewCount) ||
+    parseCompactNumber(playerData?.videoDetails?.shortViewCountText?.simpleText);
+  const likes = parseLikeCountFromInitialData(initialData);
+
   return {
     title: details.title || "",
     channelName: details.author || "",
+    thumbnail: details.thumbnail?.thumbnails?.at?.(-1)?.url || "",
     sourceVideoId: details.videoId || "",
     stats: {
       views: viewCount,
-      likes: null,
+      likes,
       dislikes: null,
       comments: comments.length,
     },
@@ -1531,12 +1658,19 @@ const switchView = (view) => {
   if (profileView) {
     profileView.classList.remove("active");
   }
+  if (urlFillerView) {
+    urlFillerView.classList.remove("active");
+  }
   if (view === "watch") {
     watchView.classList.add("active");
     stopShortsPlayback();
   } else if (view === "shorts") {
     shortsView.classList.add("active");
     stopMainPlayback();
+  } else if (view === "url-filler" && urlFillerView) {
+    urlFillerView.classList.add("active");
+    stopMainPlayback();
+    stopShortsPlayback();
   } else if (view === "profile" && profileView) {
     profileView.classList.add("active");
     stopMainPlayback();
@@ -1546,6 +1680,64 @@ const switchView = (view) => {
     stopMainPlayback();
     stopShortsPlayback();
   }
+};
+
+const getUrlFillerTargets = () => {
+  const targets = state.videos.filter((video) => shouldAutoparseVideo(video));
+  if (targets.length) return targets;
+  return state.videos;
+};
+
+const getUrlFillerCurrentVideo = () => {
+  const id = state.urlFillerQueue[state.urlFillerIndex];
+  if (!id) return null;
+  return state.videos.find((video) => video.id === id) || null;
+};
+
+const renderUrlFiller = () => {
+  if (!urlFillerVideoTitle || !urlFillerChannelName || !urlFillerProgress) return;
+
+  const total = state.urlFillerQueue.length;
+  if (!total) {
+    urlFillerProgress.textContent = "Нет видео для заполнения";
+    urlFillerVideoTitle.textContent = "Все видео заполнены";
+    urlFillerChannelName.textContent = "";
+    return;
+  }
+
+  const current = getUrlFillerCurrentVideo();
+  if (!current) {
+    urlFillerProgress.textContent = "Нет текущего видео";
+    urlFillerVideoTitle.textContent = "—";
+    urlFillerChannelName.textContent = "—";
+    return;
+  }
+
+  urlFillerProgress.textContent = `Видео ${state.urlFillerIndex + 1} из ${total}`;
+  urlFillerVideoTitle.textContent = current.title || "Без названия";
+  urlFillerChannelName.textContent = current.channelName || current.folderName || "Канал не указан";
+};
+
+const openUrlFiller = () => {
+  const targets = getUrlFillerTargets();
+  state.urlFillerQueue = targets.map((video) => video.id);
+  state.urlFillerIndex = 0;
+  switchView("url-filler");
+  renderUrlFiller();
+};
+
+const moveUrlFillerNext = () => {
+  if (!state.urlFillerQueue.length) return;
+  if (state.urlFillerIndex < state.urlFillerQueue.length - 1) {
+    state.urlFillerIndex += 1;
+    renderUrlFiller();
+    return;
+  }
+
+  alert("Готово: достигнут конец списка видео.");
+  state.urlFillerQueue = [];
+  state.urlFillerIndex = 0;
+  renderUrlFiller();
 };
 
 const openVideo = async (videoId) => {
@@ -1958,7 +2150,9 @@ const applyImportedDataToVideo = async (video, payload, source, sourceUrl = "") 
   };
   if (payload.title) {
     video.title = payload.title;
-    watchTitle.textContent = payload.title;
+    if (state.activeVideoId === video.id && watchTitle) {
+      watchTitle.textContent = payload.title;
+    }
   }
   if (payload.channelName) {
     video.channelName = payload.channelName;
@@ -1984,17 +2178,24 @@ const applyImportedDataToVideo = async (video, payload, source, sourceUrl = "") 
   renderVideos({ reset: true });
 };
 
-const importMetaFromHtmlFile = async (file) => {
-  const video = state.videos.find((item) => item.id === state.activeVideoId);
-  if (!video || !file) return;
+const importMetaFromHtmlFile = async (file, options = {}) => {
+  const targetVideoId = options.targetVideoId || state.activeVideoId;
+  const showAlert = options.showAlert !== false;
+  const video = state.videos.find((item) => item.id === targetVideoId);
+  if (!video || !file) return false;
   const htmlText = await file.text();
   const payload = parseYoutubeHtmlPayload(htmlText);
   if (!payload.title && !(payload.comments || []).length) {
-    alert("Не удалось распарсить YouTube HTML. Попробуйте сохранить полную страницу видео.");
-    return;
+    if (showAlert) {
+      alert("Не удалось распарсить YouTube HTML. Попробуйте сохранить полную страницу видео.");
+    }
+    return false;
   }
   await applyImportedDataToVideo(video, payload, "youtube_html", "local-html");
-  alert("HTML импорт завершен.");
+  if (showAlert) {
+    alert("HTML импорт завершен.");
+  }
+  return true;
 };
 
 const importMetaFromUrl = async (inputUrl, options = {}) => {
@@ -2239,6 +2440,79 @@ if (logoLink) {
 if (profileBtn) {
   profileBtn.addEventListener("click", () => {
     switchView("profile");
+  });
+}
+if (openUrlFillerBtn) {
+  openUrlFillerBtn.addEventListener("click", () => {
+    openUrlFiller();
+  });
+}
+if (urlFillerBackBtn) {
+  urlFillerBackBtn.addEventListener("click", () => {
+    switchView("profile");
+  });
+}
+if (urlFillerSkipBtn) {
+  urlFillerSkipBtn.addEventListener("click", () => {
+    moveUrlFillerNext();
+  });
+}
+if (urlFillerImportHtmlBtn && urlFillerHtmlInput) {
+  urlFillerImportHtmlBtn.addEventListener("click", () => {
+    const current = getUrlFillerCurrentVideo();
+    if (!current) {
+      alert("Нет текущего видео для заполнения.");
+      return;
+    }
+    urlFillerHtmlInput.click();
+  });
+
+  urlFillerHtmlInput.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    const current = getUrlFillerCurrentVideo();
+    if (!current) {
+      alert("Нет текущего видео для заполнения.");
+      return;
+    }
+    try {
+      const ok = await importMetaFromHtmlFile(file, { targetVideoId: current.id, showAlert: false });
+      if (!ok) {
+        alert("HTML не обработан. Попробуйте другой файл.");
+        return;
+      }
+      moveUrlFillerNext();
+    } catch (error) {
+      console.error(error);
+      alert("Ошибка обработки HTML.");
+    }
+  });
+}
+if (urlFillerImportUrlBtn && urlFillerUrlInput) {
+  urlFillerImportUrlBtn.addEventListener("click", async () => {
+    const current = getUrlFillerCurrentVideo();
+    if (!current) {
+      alert("Нет текущего видео для заполнения.");
+      return;
+    }
+    const url = urlFillerUrlInput.value.trim();
+    if (!url) {
+      alert("Вставьте URL видео.");
+      return;
+    }
+    try {
+      const ok = await importMetaFromUrl(url, { targetVideoId: current.id, showAlert: false });
+      if (!ok) {
+        alert("URL не обработан. Проверьте ссылку или попробуйте HTML.");
+        return;
+      }
+      urlFillerUrlInput.value = "";
+      moveUrlFillerNext();
+    } catch (error) {
+      console.error(error);
+      alert("Ошибка обработки URL.");
+    }
   });
 }
 shortsTab.addEventListener("click", () => {
