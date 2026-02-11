@@ -54,6 +54,8 @@ const exportPendingListBtn = document.getElementById("exportPendingListBtn");
 const autoParseLibraryBtn = document.getElementById("autoParseLibraryBtn");
 const autoParseFirst20Btn = document.getElementById("autoParseFirst20Btn");
 const importVideoDataInput = document.getElementById("importVideoDataInput");
+const autoAddTreeBtn = document.getElementById("autoAddTreeBtn");
+const autoAddTreeInput = document.getElementById("autoAddTreeInput");
 const youtubeApiKeyInput = document.getElementById("youtubeApiKeyInput");
 const folderParseTools = document.getElementById("folderParseTools");
 const folderParseTitle = document.getElementById("folderParseTitle");
@@ -617,11 +619,37 @@ const fetchJsonWithRetry = async (url, maxRetries = 3) => {
     if (response.ok) {
       return response.json();
     }
+
+    // Retry only on rate limit / transient server errors
     if (attempt < maxRetries && (response.status === 429 || response.status >= 500)) {
       await sleep(400 * (2 ** attempt));
       continue;
     }
-    throw new Error(`YouTube API error: ${response.status}`);
+
+    // Surface the real YouTube API error reason (very important for 403).
+    let details = "";
+    try {
+      const text = await response.text();
+      details = text;
+      try {
+        const json = JSON.parse(text);
+        const reason =
+          json?.error?.errors?.[0]?.reason ||
+          json?.error?.status ||
+          "";
+        const message =
+          json?.error?.message ||
+          "";
+        details = JSON.stringify({ reason, message }, null, 2);
+      } catch (_) {
+        // keep raw text
+      }
+    } catch (_) {
+      // ignore
+    }
+
+    console.error("YouTube API error:", { status: response.status, url, details });
+    throw new Error(`YouTube API error: ${response.status}${details ? ` | ${details}` : ""}`);
   }
   throw new Error("YouTube API retry limit exceeded");
 };
@@ -671,7 +699,9 @@ const resolveChannelId = async (channelValue = "") => {
     searchUrl.searchParams.set("key", apiKey);
     return fetchJsonWithRetry(searchUrl.toString(), 1);
   });
-  return data?.items?.[0]?.snippet?.channelId || "";
+  // For search?type=channel, the channel id is returned under items[0].id.channelId
+  // (not snippet.channelId). Using snippet.channelId causes channel filtering to fail.
+  return data?.items?.[0]?.id?.channelId || "";
 };
 
 const searchYouTubeCandidates = async (query, options = {}) => {
@@ -1639,6 +1669,58 @@ const walkFolder = async (
   return { files, folderHandles };
 };
 
+// WebKit directory import (input[webkitdirectory]):
+// Structure rule (3 levels):
+//   Root (selected folder) -> Channel (subfolder) -> Playlist (sub-subfolder)
+// Requirements:
+// - Do NOT show prefixes like "Root/Channel" in the UI
+// - Merge same Channel name across different Roots
+// - Videos in Root belong to Root folder; videos in Root/Channel belong to Channel folder
+// - Videos in Root/Channel/Playlist belong to Channel folder + playlistName
+const buildStructuredEntriesFromFiles = (files) => {
+  const entries = [];
+  const folderNames = new Set();
+
+  const normalizeFolderName = (name) => (name || "").trim();
+
+  for (const file of files) {
+    if (!file || !file.name || !file.name.match(/\.(mp4|webm|mkv|mov)$/i)) continue;
+
+    const rel = file.webkitRelativePath || file.name;
+    const parts = rel.split("/").filter(Boolean);
+    // For webkitdirectory, parts[0] is the selected root folder name.
+    if (parts.length < 2) continue;
+
+    const rootName = normalizeFolderName(parts[0]);
+    const pathParts = parts.slice(1, -1); // folders between root and filename
+    const channel = normalizeFolderName(pathParts[0] || "");
+    const playlist = normalizeFolderName(pathParts[1] || "");
+
+    // Folder shown in library:
+    // - root videos -> root folder name
+    // - channel videos -> channel folder name (MERGED across roots)
+    const folderKey = channel ? channel : rootName;
+
+    folderNames.add(folderKey);
+
+    entries.push({
+      handle: null,
+      file,
+      name: file.name,
+      relativePath: rel,
+      parentPath: folderKey,
+
+      // metadata for future grouping
+      libraryRoot: rootName,
+      channelName: channel ? channel : rootName,
+      playlistName: channel && playlist ? playlist : null,
+    });
+  }
+
+  return { entries, folderNames };
+};
+
+
 const updateImportStatus = (processed, total) => {
   if (!importStatus || !importLabel || !importBarFill) return;
   importStatus.classList.remove("hidden");
@@ -1683,6 +1765,11 @@ const importEntries = async (entries, folderHandles = new Map(), rootName = "") 
     }
   });
 
+  // Import can freeze the UI when there are тысячи видео.
+  // We chunk work and yield to the browser regularly.
+  const YIELD_EVERY = 5;
+  const YIELD_DELAY_MS = 0;
+
   const total = uniqueEntries.size;
   let processed = 0;
   updateImportStatus(processed, total);
@@ -1704,6 +1791,7 @@ const importEntries = async (entries, folderHandles = new Map(), rootName = "") 
     titleSet.add(video.title);
     existingTitlesByFolder.set(folder, titleSet);
   });
+  let sinceYield = 0;
   for (const entry of uniqueEntries.values()) {
     let metadata;
     try {
@@ -1711,28 +1799,43 @@ const importEntries = async (entries, folderHandles = new Map(), rootName = "") 
     } catch (error) {
       console.warn("Не удалось прочитать видео", entry.name, error);
       processed += 1;
-      updateImportStatus(processed, total);
-      await new Promise((resolve) => setTimeout(resolve, 16));
+      sinceYield += 1;
+      if (processed === total || sinceYield >= YIELD_EVERY) {
+        updateImportStatus(processed, total);
+        sinceYield = 0;
+        await new Promise((resolve) => setTimeout(resolve, YIELD_DELAY_MS));
+      }
       continue;
     }
     processed += 1;
-    updateImportStatus(processed, total);
+    sinceYield += 1;
+    if (processed === total || sinceYield >= YIELD_EVERY) {
+      updateImportStatus(processed, total);
+    }
     if (metadata.fileKey && existingKeys.has(metadata.fileKey)) {
-      await new Promise((resolve) => setTimeout(resolve, 16));
+      if (sinceYield >= YIELD_EVERY) {
+        sinceYield = 0;
+        await new Promise((resolve) => setTimeout(resolve, YIELD_DELAY_MS));
+      }
       continue;
     }
     const title = entry.name.replace(/\.[^.]+$/, "");
     const folderKey = entry.parentPath || rootName;
     const titleSet = existingTitlesByFolder.get(folderKey) || new Set();
     if (titleSet.has(title)) {
-      await new Promise((resolve) => setTimeout(resolve, 16));
+      if (sinceYield >= YIELD_EVERY) {
+        sinceYield = 0;
+        await new Promise((resolve) => setTimeout(resolve, YIELD_DELAY_MS));
+      }
       continue;
     }
     const video = {
       id: idFromHandle(entry.handle, crypto.randomUUID(), entry.relativePath),
       title,
       folderName: folderKey,
-      channelName: folderKey,
+      channelName: entry.channelName || folderKey,
+      playlistName: entry.playlistName || null,
+      libraryRoot: entry.libraryRoot || (rootName || null),
       relativePath: entry.relativePath,
       handle: entry.handle,
       file: entry.file,
@@ -1750,8 +1853,13 @@ const importEntries = async (entries, folderHandles = new Map(), rootName = "") 
     titleSet.add(title);
     existingTitlesByFolder.set(folderKey, titleSet);
     await putItem(VIDEO_STORE, video);
-    appendVideoToGrid(video);
-    await new Promise((resolve) => setTimeout(resolve, 16));
+
+    // Do not touch DOM per-item: it gets very slow for large imports.
+    if (sinceYield >= YIELD_EVERY) {
+      updateImportStatus(processed, total);
+      sinceYield = 0;
+      await new Promise((resolve) => setTimeout(resolve, YIELD_DELAY_MS));
+    }
   }
 
   renderVideos({ reset: true });
@@ -2248,6 +2356,32 @@ const parseDurationInput = (value) => {
   const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : null;
 };
+
+
+if (autoAddTreeBtn && autoAddTreeInput) {
+  autoAddTreeBtn.addEventListener("click", () => autoAddTreeInput.click());
+
+  autoAddTreeInput.addEventListener("change", async (event) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = "";
+    if (!files.length) return;
+
+    const { entries } = buildStructuredEntriesFromFiles(files);
+
+    if (!entries.length) {
+      alert("Видео не найдены. Нужны файлы mp4/webm/mkv/mov.");
+      return;
+    }
+
+    try {
+      await importEntries(entries);
+      alert(`Готово: добавлено файлов: ${entries.length}`);
+    } catch (error) {
+      console.error(error);
+      alert("Не удалось импортировать. Проверьте доступ к папке/файлам.");
+    }
+  });
+}
 
 const handleDurationFilter = () => {
   state.durationMin = parseDurationInput(durationMinInput?.value);
