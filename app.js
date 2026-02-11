@@ -16,6 +16,7 @@ const libraryView = document.getElementById("libraryView");
 const watchView = document.getElementById("watchView");
 const shortsView = document.getElementById("shortsView");
 const profileView = document.getElementById("profileView");
+const urlFillerView = document.getElementById("urlFillerView");
 const videoPlayer = document.getElementById("videoPlayer");
 const watchTitle = document.getElementById("watchTitle");
 const likeBtn = document.getElementById("likeBtn");
@@ -56,12 +57,15 @@ const autoParseFirst20Btn = document.getElementById("autoParseFirst20Btn");
 const importVideoDataInput = document.getElementById("importVideoDataInput");
 const autoAddTreeBtn = document.getElementById("autoAddTreeBtn");
 const autoAddTreeInput = document.getElementById("autoAddTreeInput");
+const openUrlFillerBtn = document.getElementById("openUrlFillerBtn");
 const youtubeApiKeyInput = document.getElementById("youtubeApiKeyInput");
 const folderParseTools = document.getElementById("folderParseTools");
 const folderParseTitle = document.getElementById("folderParseTitle");
 const channelUrlInput = document.getElementById("channelUrlInput");
 const importHtmlBtn = document.getElementById("importHtmlBtn");
 const importHtmlInput = document.getElementById("importHtmlInput");
+const importPdfBtn = document.getElementById("importPdfBtn");
+const importPdfInput = document.getElementById("importPdfInput");
 const importUrlInput = document.getElementById("importUrlInput");
 const importUrlBtn = document.getElementById("importUrlBtn");
 const watchViews = document.getElementById("watchViews");
@@ -72,6 +76,15 @@ const watchImportSource = document.getElementById("watchImportSource");
 const changeThumbnailBtn = document.getElementById("changeThumbnailBtn");
 const resetThumbnailBtn = document.getElementById("resetThumbnailBtn");
 const thumbnailInput = document.getElementById("thumbnailInput");
+const urlFillerBackBtn = document.getElementById("urlFillerBackBtn");
+const urlFillerProgress = document.getElementById("urlFillerProgress");
+const urlFillerVideoTitle = document.getElementById("urlFillerVideoTitle");
+const urlFillerChannelName = document.getElementById("urlFillerChannelName");
+const urlFillerUrlInput = document.getElementById("urlFillerUrlInput");
+const urlFillerImportUrlBtn = document.getElementById("urlFillerImportUrlBtn");
+const urlFillerImportHtmlBtn = document.getElementById("urlFillerImportHtmlBtn");
+const urlFillerHtmlInput = document.getElementById("urlFillerHtmlInput");
+const urlFillerSkipBtn = document.getElementById("urlFillerSkipBtn");
 
 const DB_NAME = "mytube-db";
 const DB_VERSION = 1;
@@ -110,6 +123,8 @@ let state = {
   activeShortsId: null,
   watchedHistory: [],
   historyMode: false,
+  urlFillerQueue: [],
+  urlFillerIndex: 0,
 };
 
 const openDb = () =>
@@ -271,6 +286,8 @@ const renderImportedStats = (video) => {
   if (watchImportSource) {
     const source = imported.source === "youtube_html"
       ? "YouTube HTML"
+      : imported.source === "youtube_pdf"
+        ? "YouTube PDF"
       : imported.source === "youtube_url"
         ? "YouTube URL"
         : "Локально";
@@ -321,13 +338,30 @@ const extractYouTubeVideoId = (urlOrId) => {
 };
 
 const parseCompactNumber = (value) => {
-  if (!value) return null;
-  const normalized = `${value}`.replace(/\s+/g, " ").trim().toLowerCase();
-  const number = Number.parseFloat(normalized.replace(/[^\d.,]/g, "").replace(",", "."));
+  if (!value && value !== 0) return null;
+  const normalized = `${value}`
+    .replace(/\u00A0|\u202F/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+  let numberPart = normalized.replace(/[^\d.,]/g, "");
+  if (!numberPart) return null;
+
+  const hasComma = numberPart.includes(",");
+  const hasDot = numberPart.includes(".");
+  if (hasComma && hasDot) {
+    numberPart = numberPart.replace(/,/g, "");
+  } else if (hasComma) {
+    numberPart = numberPart.replace(",", ".");
+  }
+
+  const number = Number.parseFloat(numberPart);
   if (!Number.isFinite(number)) return null;
-  if (normalized.includes("тыс")) return Math.round(number * 1_000);
-  if (normalized.includes("млн")) return Math.round(number * 1_000_000);
-  if (normalized.includes("млрд")) return Math.round(number * 1_000_000_000);
+
+  if (/(?:тыс|k)(?:\b|\.)/.test(normalized)) return Math.round(number * 1_000);
+  if (/(?:млн|m)(?:\b|\.)/.test(normalized)) return Math.round(number * 1_000_000);
+  if (/(?:млрд|b)(?:\b|\.)/.test(normalized)) return Math.round(number * 1_000_000_000);
   return Math.round(number);
 };
 
@@ -930,14 +964,12 @@ const hasMeaningfulYoutubeImport = (payload) => {
   return Number.isFinite(views) || Number.isFinite(likes) || Number.isFinite(commentsFromStats) || commentsLength > 0;
 };
 
-const parseInitialJson = (html, marker) => {
-  const idx = html.indexOf(marker);
-  if (idx < 0) return null;
-  const start = html.indexOf("{", idx);
+const parseObjectFromIndex = (html, start) => {
   if (start < 0) return null;
   let depth = 0;
   let inString = false;
   let escaped = false;
+
   for (let i = start; i < html.length; i += 1) {
     const ch = html[i];
     if (inString) {
@@ -970,47 +1002,405 @@ const parseInitialJson = (html, marker) => {
   return null;
 };
 
-const collectCommentNodes = (node, bucket = []) => {
+const parseInitialJson = (html, marker) => {
+  const patterns = [
+    new RegExp(`(?:var\\s+)?${marker}\\s*=`),
+    new RegExp(`\"${marker}\"`),
+    new RegExp(marker),
+  ];
+
+  for (const pattern of patterns) {
+    const match = pattern.exec(html);
+    if (!match) continue;
+    const start = html.indexOf("{", match.index + match[0].length);
+    const parsed = parseObjectFromIndex(html, start);
+    if (parsed) return parsed;
+  }
+
+  return null;
+};
+
+const readTextLike = (node) => {
+  if (!node) return "";
+  if (typeof node === "string") return node;
+  if (node.simpleText) return node.simpleText;
+  if (Array.isArray(node.runs)) {
+    return node.runs.map((run) => run.text || "").join("");
+  }
+  return "";
+};
+
+const collectCommentThreadRenderers = (node, bucket = []) => {
   if (!node || typeof node !== "object") return bucket;
   if (Array.isArray(node)) {
-    node.forEach((item) => collectCommentNodes(item, bucket));
+    node.forEach((item) => collectCommentThreadRenderers(item, bucket));
     return bucket;
   }
-  if (node.commentRenderer) bucket.push(node.commentRenderer);
-  Object.values(node).forEach((value) => collectCommentNodes(value, bucket));
+  if (node.commentThreadRenderer) bucket.push(node.commentThreadRenderer);
+  Object.values(node).forEach((value) => collectCommentThreadRenderers(value, bucket));
   return bucket;
+};
+
+const parseReplyRenderer = (renderer, idx = 0) => {
+  if (!renderer) return null;
+  const text = readTextLike(renderer.contentText).trim();
+  if (!text) return null;
+  return {
+    id: renderer.commentId || `reply-${idx}`,
+    author: readTextLike(renderer.authorText).trim() || "YouTube user",
+    text,
+    createdAt: Date.now(),
+  };
+};
+
+const collectCommentRenderersFromRawHtml = (htmlText) => {
+  if (!htmlText) return [];
+  const markers = ["\"commentRenderer\":", "\\\"commentRenderer\\\":"];
+  const seen = new Set();
+  const bucket = [];
+
+  markers.forEach((marker) => {
+    let idx = 0;
+    while (idx >= 0) {
+      idx = htmlText.indexOf(marker, idx);
+      if (idx < 0) break;
+      const start = htmlText.indexOf("{", idx + marker.length);
+      if (start < 0) break;
+
+      const parsed = parseObjectFromIndex(htmlText, start);
+      if (parsed && parsed.commentId) {
+        const key = `${parsed.commentId}-${readTextLike(parsed.authorText)}-${readTextLike(parsed.contentText)}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          bucket.push(parsed);
+        }
+      }
+
+      idx = start + 1;
+    }
+  });
+
+  if (bucket.length) return bucket;
+
+  // Some saved pages keep JSON fully escaped inside script strings.
+  const unescaped = htmlText.replace(/\\\"/g, '"');
+  let idx = 0;
+  while (idx >= 0) {
+    idx = unescaped.indexOf("\"commentRenderer\":", idx);
+    if (idx < 0) break;
+    const start = unescaped.indexOf("{", idx + 18);
+    if (start < 0) break;
+    const parsed = parseObjectFromIndex(unescaped, start);
+    if (parsed && parsed.commentId) {
+      const key = `${parsed.commentId}-${readTextLike(parsed.authorText)}-${readTextLike(parsed.contentText)}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        bucket.push(parsed);
+      }
+    }
+    idx = start + 1;
+  }
+
+  return bucket;
+};
+
+const parseThreadRenderer = (thread, order = 0) => {
+  const renderer = thread?.comment?.commentRenderer;
+  if (!renderer) return null;
+
+  const text = readTextLike(renderer.contentText).trim();
+  if (!text) return null;
+
+  const likeText =
+    readTextLike(renderer.voteCount) ||
+    renderer.voteCount?.accessibility?.accessibilityData?.label ||
+    "";
+
+  const replyNodes = thread?.replies?.commentRepliesRenderer?.contents || [];
+  const replies = Array.isArray(replyNodes)
+    ? replyNodes
+        .map((item, idx) => parseReplyRenderer(item?.commentRenderer, idx))
+        .filter(Boolean)
+    : [];
+
+  const replyCount = parseCompactNumber(
+    readTextLike(thread?.replies?.commentRepliesRenderer?.moreText) ||
+      thread?.replies?.commentRepliesRenderer?.moreText?.accessibility?.accessibilityData?.label ||
+      ""
+  );
+
+  return normalizeComment({
+    id: renderer.commentId || crypto.randomUUID(),
+    author: readTextLike(renderer.authorText).trim() || "YouTube user",
+    text,
+    likes: parseCompactNumber(likeText) || 0,
+    createdAt: Date.now(),
+    replies,
+    order,
+    replyCount: Number.isFinite(replyCount) ? Math.max(replyCount, replies.length) : replies.length,
+  }, readTextLike(renderer.authorText).trim() || "YouTube user");
+};
+
+const parseLikeCountFromInitialData = (initialData) => {
+  if (!initialData || typeof initialData !== "object") return null;
+  const stack = [initialData];
+
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node || typeof node !== "object") continue;
+    if (Array.isArray(node)) {
+      stack.push(...node);
+      continue;
+    }
+
+    if (node.toggleButtonRenderer?.defaultText) {
+      const label =
+        readTextLike(node.toggleButtonRenderer.defaultText) ||
+        node.toggleButtonRenderer?.defaultText?.accessibility?.accessibilityData?.label ||
+        "";
+      const parsed = parseCompactNumber(label);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+
+    Object.values(node).forEach((value) => {
+      if (value && typeof value === "object") stack.push(value);
+    });
+  }
+
+  return null;
+};
+
+const decodePdfString = (value = "") => value
+  .replace(/\\\(([\s\S])/g, "($1")
+  .replace(/\\\)([\s\S])/g, ")$1")
+  .replace(/\\n/g, "\n")
+  .replace(/\\r/g, "\r")
+  .replace(/\\t/g, "\t")
+  .replace(/\\b/g, "\b")
+  .replace(/\\f/g, "\f")
+  .replace(/\\\\/g, "\\")
+  .replace(/\\([0-7]{1,3})/g, (_m, oct) => String.fromCharCode(Number.parseInt(oct, 8)));
+
+const extractPdfTextPages = async (file) => {
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  const raw = Array.from(bytes, (byte) => String.fromCharCode(byte)).join("");
+
+  const pageChunks = raw.split(/\b\/Type\s*\/Page\b/g);
+  const pages = pageChunks.length > 1 ? pageChunks.slice(1) : [raw];
+
+  const decodedPages = pages.map((chunk, index) => {
+    const parts = [];
+
+    const tjRegex = /\[((?:.|\n|\r)*?)\]\s*TJ/g;
+    let tjMatch;
+    while ((tjMatch = tjRegex.exec(chunk))) {
+      const segment = tjMatch[1] || "";
+      const tokens = segment.match(/\((?:\\.|[^\\)])*\)/g) || [];
+      tokens.forEach((token) => {
+        const value = token.slice(1, -1);
+        const decoded = decodePdfString(value);
+        if (decoded.trim()) parts.push(decoded);
+      });
+    }
+
+    const tRegex = /\((?:\\.|[^\\)])*\)\s*Tj/g;
+    let tMatch;
+    while ((tMatch = tRegex.exec(chunk))) {
+      const token = tMatch[0].replace(/\)\s*Tj$/, "").replace(/^\(/, "");
+      const decoded = decodePdfString(token);
+      if (decoded.trim()) parts.push(decoded);
+    }
+
+    const text = parts
+      .join("\n")
+      .replace(/[\u0000-\u001F]+/g, " ")
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+
+    return { page: index + 1, text };
+  });
+
+  return decodedPages.filter((item) => item.text);
+};
+
+const normalizePdfNumber = (value = "") => {
+  const normalized = `${value}`
+    .toLowerCase()
+    .replace(/\u00A0|\u202F/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return parseCompactNumber(normalized);
+};
+
+const parseYoutubePdfPayload = async (file) => {
+  const pages = await extractPdfTextPages(file);
+  if (!pages.length) return null;
+
+  const lines = [];
+  pages.forEach(({ page, text }) => {
+    text
+      .split(/\r?\n/)
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .forEach((line) => lines.push({ page, line }));
+  });
+
+  const wholeText = lines.map((item) => item.line).join("\n");
+  const commentStartIndex = lines.findIndex((item) => /(комментар|comments|сначала новые|top comments|@)/i.test(item.line));
+  const commentLines = commentStartIndex >= 0 ? lines.slice(commentStartIndex) : lines;
+
+  const markerRegex = /(ответить|reply)/i;
+  const handleRegex = /@[\w.\-]+/;
+  const stopLineRegex = /^(поделиться|изменено|назад|watch|смотреть|просмотров|views|subscriber|подписчик)/i;
+
+  const blocks = [];
+  let current = null;
+  let commentMarkersSeen = 0;
+
+  commentLines.forEach((item, index) => {
+    const text = item.line;
+    if (markerRegex.test(text)) {
+      commentMarkersSeen += 1;
+    }
+
+    const isStart = handleRegex.test(text) || (!stopLineRegex.test(text) && /[\p{L}\p{N}]{3,}/u.test(text) && index + 1 < commentLines.length && markerRegex.test(commentLines[index + 1].line));
+
+    if (isStart) {
+      if (current && current.lines.length) {
+        blocks.push(current);
+      }
+      current = { page: item.page, lines: [text] };
+      return;
+    }
+
+    if (!current) return;
+    if (stopLineRegex.test(text) && !markerRegex.test(text)) return;
+    current.lines.push(text);
+  });
+
+  if (current && current.lines.length) {
+    blocks.push(current);
+  }
+
+  const seen = new Set();
+  const comments = [];
+
+  blocks.forEach((block, index) => {
+    const joined = block.lines.join("\n");
+    const authorHandle = (joined.match(handleRegex) || [null])[0];
+    const textLines = block.lines.filter((line) => !markerRegex.test(line) && !/@[\w.\-]+/.test(line) && !stopLineRegex.test(line));
+    const text = textLines.join(" ").replace(/\s+/g, " ").trim();
+    if (!text) return;
+
+    const repliesMatch = joined.match(/(\d+)\s*ответ/i);
+    const repliesCount = repliesMatch ? Number.parseInt(repliesMatch[1], 10) : 0;
+    const numericCandidates = block.lines
+      .map((line) => normalizePdfNumber(line))
+      .filter((value) => Number.isFinite(value));
+    const likes = numericCandidates.length ? numericCandidates[numericCandidates.length - 1] : 0;
+
+    const dedupeKey = `${authorHandle || "no_author"}-${text.toLowerCase().replace(/\s+/g, " ")}`;
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+
+    const wordCount = text.split(/\s+/).filter(Boolean).length;
+    const confidence = Math.max(0.35, Math.min(0.98, wordCount > 3 ? 0.85 : 0.55));
+
+    comments.push({
+      id: `pdf-comment-${index}-${crypto.randomUUID()}`,
+      author: authorHandle || "YouTube user",
+      author_handle: authorHandle,
+      text,
+      likes,
+      dislikes: 0,
+      replyCount: repliesCount,
+      replies: [],
+      order: index,
+      source_page: block.page,
+      confidence,
+      createdAt: Date.now(),
+    });
+  });
+
+  const viewsMatch = wholeText.match(/([\d\s.,]+(?:тыс\.?|млн\.?|млрд\.?|k|m|b)?)\s*(просмотр|views)/i);
+  const likesMatch = wholeText.match(/([\d\s.,]+(?:тыс\.?|млн\.?|млрд\.?|k|m|b)?)\s*(лайк|likes?)/i);
+  const titleGuess = (lines.find((item) => item.line.length > 8 && !/(youtube|комментар|views|просмотр)/i.test(item.line)) || {}).line || "";
+
+  const commentsExtracted = comments.length;
+  const warnings = [];
+  if (commentMarkersSeen > 0 && commentsExtracted < commentMarkersSeen * 0.9) {
+    warnings.push("possible_comment_loss");
+  }
+
+  return {
+    title: titleGuess,
+    channelName: "",
+    stats: {
+      views: viewsMatch ? normalizePdfNumber(viewsMatch[1]) : null,
+      likes: likesMatch ? normalizePdfNumber(likesMatch[1]) : null,
+      dislikes: null,
+      comments: commentsExtracted,
+    },
+    comments,
+    meta: {
+      comments_extracted: commentsExtracted,
+      comment_markers_seen: commentMarkersSeen,
+      warnings,
+    },
+  };
 };
 
 const parseYoutubeHtmlPayload = (htmlText) => {
   const playerData = parseInitialJson(htmlText, "ytInitialPlayerResponse") || {};
   const initialData = parseInitialJson(htmlText, "ytInitialData") || {};
   const details = playerData.videoDetails || {};
-  const commentsRaw = collectCommentNodes(initialData);
-  const comments = commentsRaw.map((item, index) => {
-    const textRuns = item.contentText?.runs || [];
-    const text = textRuns.map((run) => run.text || "").join("").trim();
-    const author = item.authorText?.simpleText || "YouTube user";
-    const likes = parseCompactNumber(item.voteCount?.simpleText || item.voteCount?.accessibility?.accessibilityData?.label);
-    return normalizeComment({
-      id: item.commentId || crypto.randomUUID(),
-      author,
-      text,
-      likes: likes || 0,
-      createdAt: Date.now(),
-      replies: [],
-      order: index,
-      replyCount: 0,
-    }, author);
-  }).filter((item) => item.text);
+  const commentsRaw = collectCommentThreadRenderers(initialData);
+  let comments = commentsRaw
+    .map((thread, index) => parseThreadRenderer(thread, index))
+    .filter(Boolean);
 
-  const viewCount = parseCompactNumber(details.viewCount || details.shortViewCountText?.simpleText);
+  if (!comments.length) {
+    const rawComments = collectCommentRenderersFromRawHtml(htmlText);
+    comments = rawComments
+      .map((renderer, index) => {
+        const author = readTextLike(renderer.authorText).trim() || "YouTube user";
+        const text = readTextLike(renderer.contentText).trim();
+        if (!text) return null;
+        const likes = parseCompactNumber(
+          readTextLike(renderer.voteCount) ||
+            renderer.voteCount?.accessibility?.accessibilityData?.label ||
+            ""
+        );
+        return normalizeComment({
+          id: renderer.commentId || crypto.randomUUID(),
+          author,
+          text,
+          likes: likes || 0,
+          createdAt: Date.now(),
+          replies: [],
+          order: index,
+          replyCount: 0,
+        }, author);
+      })
+      .filter(Boolean);
+  }
+
+  const viewCount =
+    parseCompactNumber(details.viewCount) ||
+    parseCompactNumber(playerData?.microformat?.playerMicroformatRenderer?.viewCount) ||
+    parseCompactNumber(playerData?.videoDetails?.shortViewCountText?.simpleText);
+  const likes = parseLikeCountFromInitialData(initialData);
+
   return {
     title: details.title || "",
     channelName: details.author || "",
+    thumbnail: details.thumbnail?.thumbnails?.at?.(-1)?.url || "",
     sourceVideoId: details.videoId || "",
     stats: {
       views: viewCount,
-      likes: null,
+      likes,
       dislikes: null,
       comments: comments.length,
     },
@@ -1531,12 +1921,19 @@ const switchView = (view) => {
   if (profileView) {
     profileView.classList.remove("active");
   }
+  if (urlFillerView) {
+    urlFillerView.classList.remove("active");
+  }
   if (view === "watch") {
     watchView.classList.add("active");
     stopShortsPlayback();
   } else if (view === "shorts") {
     shortsView.classList.add("active");
     stopMainPlayback();
+  } else if (view === "url-filler" && urlFillerView) {
+    urlFillerView.classList.add("active");
+    stopMainPlayback();
+    stopShortsPlayback();
   } else if (view === "profile" && profileView) {
     profileView.classList.add("active");
     stopMainPlayback();
@@ -1546,6 +1943,64 @@ const switchView = (view) => {
     stopMainPlayback();
     stopShortsPlayback();
   }
+};
+
+const getUrlFillerTargets = () => {
+  const targets = state.videos.filter((video) => shouldAutoparseVideo(video));
+  if (targets.length) return targets;
+  return state.videos;
+};
+
+const getUrlFillerCurrentVideo = () => {
+  const id = state.urlFillerQueue[state.urlFillerIndex];
+  if (!id) return null;
+  return state.videos.find((video) => video.id === id) || null;
+};
+
+const renderUrlFiller = () => {
+  if (!urlFillerVideoTitle || !urlFillerChannelName || !urlFillerProgress) return;
+
+  const total = state.urlFillerQueue.length;
+  if (!total) {
+    urlFillerProgress.textContent = "Нет видео для заполнения";
+    urlFillerVideoTitle.textContent = "Все видео заполнены";
+    urlFillerChannelName.textContent = "";
+    return;
+  }
+
+  const current = getUrlFillerCurrentVideo();
+  if (!current) {
+    urlFillerProgress.textContent = "Нет текущего видео";
+    urlFillerVideoTitle.textContent = "—";
+    urlFillerChannelName.textContent = "—";
+    return;
+  }
+
+  urlFillerProgress.textContent = `Видео ${state.urlFillerIndex + 1} из ${total}`;
+  urlFillerVideoTitle.textContent = current.title || "Без названия";
+  urlFillerChannelName.textContent = current.channelName || current.folderName || "Канал не указан";
+};
+
+const openUrlFiller = () => {
+  const targets = getUrlFillerTargets();
+  state.urlFillerQueue = targets.map((video) => video.id);
+  state.urlFillerIndex = 0;
+  switchView("url-filler");
+  renderUrlFiller();
+};
+
+const moveUrlFillerNext = () => {
+  if (!state.urlFillerQueue.length) return;
+  if (state.urlFillerIndex < state.urlFillerQueue.length - 1) {
+    state.urlFillerIndex += 1;
+    renderUrlFiller();
+    return;
+  }
+
+  alert("Готово: достигнут конец списка видео.");
+  state.urlFillerQueue = [];
+  state.urlFillerIndex = 0;
+  renderUrlFiller();
 };
 
 const openVideo = async (videoId) => {
@@ -1958,7 +2413,9 @@ const applyImportedDataToVideo = async (video, payload, source, sourceUrl = "") 
   };
   if (payload.title) {
     video.title = payload.title;
-    watchTitle.textContent = payload.title;
+    if (state.activeVideoId === video.id && watchTitle) {
+      watchTitle.textContent = payload.title;
+    }
   }
   if (payload.channelName) {
     video.channelName = payload.channelName;
@@ -1984,17 +2441,51 @@ const applyImportedDataToVideo = async (video, payload, source, sourceUrl = "") 
   renderVideos({ reset: true });
 };
 
-const importMetaFromHtmlFile = async (file) => {
-  const video = state.videos.find((item) => item.id === state.activeVideoId);
-  if (!video || !file) return;
+const importMetaFromHtmlFile = async (file, options = {}) => {
+  const targetVideoId = options.targetVideoId || state.activeVideoId;
+  const showAlert = options.showAlert !== false;
+  const video = state.videos.find((item) => item.id === targetVideoId);
+  if (!video || !file) return false;
   const htmlText = await file.text();
   const payload = parseYoutubeHtmlPayload(htmlText);
   if (!payload.title && !(payload.comments || []).length) {
-    alert("Не удалось распарсить YouTube HTML. Попробуйте сохранить полную страницу видео.");
-    return;
+    if (showAlert) {
+      alert("Не удалось распарсить YouTube HTML. Попробуйте сохранить полную страницу видео.");
+    }
+    return false;
   }
   await applyImportedDataToVideo(video, payload, "youtube_html", "local-html");
-  alert("HTML импорт завершен.");
+  if (showAlert) {
+    alert("HTML импорт завершен.");
+  }
+  return true;
+};
+
+const importMetaFromPdfFile = async (file, options = {}) => {
+  const targetVideoId = options.targetVideoId || state.activeVideoId;
+  const showAlert = options.showAlert !== false;
+  const video = state.videos.find((item) => item.id === targetVideoId);
+  if (!video || !file) return false;
+
+  const payload = await parseYoutubePdfPayload(file);
+  if (!payload || (!payload.title && !(payload.comments || []).length)) {
+    if (showAlert) {
+      alert("Не удалось извлечь данные из PDF. Попробуйте другой экспорт PDF.");
+    }
+    return false;
+  }
+
+  await applyImportedDataToVideo(video, payload, "youtube_pdf", "local-pdf");
+
+  if (showAlert) {
+    const warnings = payload.meta?.warnings || [];
+    if (warnings.length) {
+      alert(`PDF импорт завершен с предупреждениями: ${warnings.join(", ")}`);
+    } else {
+      alert("PDF импорт завершен.");
+    }
+  }
+  return true;
 };
 
 const importMetaFromUrl = async (inputUrl, options = {}) => {
@@ -2241,6 +2732,79 @@ if (profileBtn) {
     switchView("profile");
   });
 }
+if (openUrlFillerBtn) {
+  openUrlFillerBtn.addEventListener("click", () => {
+    openUrlFiller();
+  });
+}
+if (urlFillerBackBtn) {
+  urlFillerBackBtn.addEventListener("click", () => {
+    switchView("profile");
+  });
+}
+if (urlFillerSkipBtn) {
+  urlFillerSkipBtn.addEventListener("click", () => {
+    moveUrlFillerNext();
+  });
+}
+if (urlFillerImportHtmlBtn && urlFillerHtmlInput) {
+  urlFillerImportHtmlBtn.addEventListener("click", () => {
+    const current = getUrlFillerCurrentVideo();
+    if (!current) {
+      alert("Нет текущего видео для заполнения.");
+      return;
+    }
+    urlFillerHtmlInput.click();
+  });
+
+  urlFillerHtmlInput.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    const current = getUrlFillerCurrentVideo();
+    if (!current) {
+      alert("Нет текущего видео для заполнения.");
+      return;
+    }
+    try {
+      const ok = await importMetaFromHtmlFile(file, { targetVideoId: current.id, showAlert: false });
+      if (!ok) {
+        alert("HTML не обработан. Попробуйте другой файл.");
+        return;
+      }
+      moveUrlFillerNext();
+    } catch (error) {
+      console.error(error);
+      alert("Ошибка обработки HTML.");
+    }
+  });
+}
+if (urlFillerImportUrlBtn && urlFillerUrlInput) {
+  urlFillerImportUrlBtn.addEventListener("click", async () => {
+    const current = getUrlFillerCurrentVideo();
+    if (!current) {
+      alert("Нет текущего видео для заполнения.");
+      return;
+    }
+    const url = urlFillerUrlInput.value.trim();
+    if (!url) {
+      alert("Вставьте URL видео.");
+      return;
+    }
+    try {
+      const ok = await importMetaFromUrl(url, { targetVideoId: current.id, showAlert: false });
+      if (!ok) {
+        alert("URL не обработан. Проверьте ссылку или попробуйте HTML.");
+        return;
+      }
+      urlFillerUrlInput.value = "";
+      moveUrlFillerNext();
+    } catch (error) {
+      console.error(error);
+      alert("Ошибка обработки URL.");
+    }
+  });
+}
 shortsTab.addEventListener("click", () => {
   switchView("shorts");
   buildShortsQueue();
@@ -2416,6 +2980,28 @@ if (importHtmlBtn && importHtmlInput) {
     } catch (error) {
       console.error(error);
       alert("Ошибка импорта HTML.");
+    }
+  });
+}
+
+if (importPdfBtn && importPdfInput) {
+  importPdfBtn.addEventListener("click", () => {
+    if (!state.activeVideoId) {
+      alert("Сначала откройте видео.");
+      return;
+    }
+    importPdfInput.click();
+  });
+
+  importPdfInput.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      await importMetaFromPdfFile(file);
+    } catch (error) {
+      console.error(error);
+      alert("Ошибка импорта PDF.");
     }
   });
 }
